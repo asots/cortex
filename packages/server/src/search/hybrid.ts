@@ -1,6 +1,7 @@
 import { searchFTS, type Memory, type MemoryLayer, bumpAccessCount } from '../db/index.js';
 import { getDb } from '../db/connection.js';
 import { createLogger } from '../utils/logger.js';
+import { metrics } from '../utils/metrics.js';
 import { estimateTokens } from '../utils/helpers.js';
 import type { VectorBackend } from '../vector/interface.js';
 import type { EmbeddingProvider } from '../embedding/interface.js';
@@ -109,6 +110,12 @@ export class HybridSearchEngine {
     }
 
     const totalMs = Date.now() - startTime;
+
+    // Metrics
+    metrics.inc('recall_total');
+    metrics.observe('recall_latency_ms', totalMs);
+    metrics.observe('search_results_count', finalResults.length);
+
     const debug: SearchDebug | undefined = opts.debug ? {
       textResultCount: textResults.length,
       vectorResultCount: vectorResults.length,
@@ -141,6 +148,10 @@ export class HybridSearchEngine {
     }
 
     // Vector results: already sorted by distance (best first)
+    // Collect missing IDs for batch query (avoid N+1)
+    const missingIds: string[] = [];
+    const vectorScores = new Map<string, number>();
+
     for (let i = 0; i < vectorResults.length; i++) {
       const r = vectorResults[i]!;
       const rrfScore = 1 / (RRF_K + i);
@@ -148,11 +159,25 @@ export class HybridSearchEngine {
       if (existing) {
         existing.vectorScore = rrfScore;
       } else {
-        const db = getDb();
-        const memory = db.prepare('SELECT * FROM memories WHERE id = ?').get(r.id) as Memory | undefined;
-        if (memory && !memory.superseded_by) {
-          scoreMap.set(r.id, { memory, textScore: 0, vectorScore: rrfScore });
-        }
+        missingIds.push(r.id);
+        vectorScores.set(r.id, rrfScore);
+      }
+    }
+
+    // Batch fetch all missing memories in one query
+    if (missingIds.length > 0) {
+      const db = getDb();
+      const placeholders = missingIds.map(() => '?').join(',');
+      const memories = db.prepare(
+        `SELECT * FROM memories WHERE id IN (${placeholders}) AND superseded_by IS NULL`
+      ).all(...missingIds) as Memory[];
+
+      for (const memory of memories) {
+        scoreMap.set(memory.id, {
+          memory,
+          textScore: 0,
+          vectorScore: vectorScores.get(memory.id) || 0,
+        });
       }
     }
 

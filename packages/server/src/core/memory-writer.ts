@@ -17,6 +17,7 @@ import type { VectorBackend } from '../vector/interface.js';
 import type { CortexConfig } from '../utils/config.js';
 import { SMART_UPDATE_SYSTEM_PROMPT } from './prompts.js';
 import { insertExtractionFeedback } from '../db/index.js';
+import { isLifecycleActive } from '../decay/lifecycle.js';
 
 const log = createLogger('memory-writer');
 
@@ -298,6 +299,9 @@ export class MemoryWriter {
 
     const { smartUpdate, exactDupThreshold, similarityThreshold } = this.config.sieve;
 
+    // During lifecycle runs, skip smart update to avoid data races with deduplicateCore
+    const effectiveSmartUpdate = smartUpdate && !isLifecycleActive();
+
     // Corrections get a wider similarity window (1.5x)
     const effectiveThreshold = extraction.category === 'correction'
       ? Math.min(similarityThreshold * 1.5, 0.6)
@@ -312,8 +316,8 @@ export class MemoryWriter {
     const topK = extraction.category === 'correction' ? 10 : 3;
     const similar = await this.findSimilar(extraction.content, agentId, correctionCategories, topK);
 
-    if (!smartUpdate) {
-      // Legacy behavior
+    if (!effectiveSmartUpdate) {
+      // Legacy behavior (or lifecycle active — skip smart update to avoid races)
       if (similar.length > 0 && similar[0]!.distance < LEGACY_DEDUP_THRESHOLD) {
         return { action: 'skipped' };
       }

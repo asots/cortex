@@ -139,7 +139,13 @@ ${SHARED_EXCLUSIONS}
 [USER]: 搞了半天发现是 Nginx 的问题，以后反代全部换成 Caddy
 [ASSISTANT]: Caddy 确实配置简单很多
 
-{"memories": [{"content": "决定将反向代理从 Nginx 全部切换为 Caddy", "category": "decision", "importance": 0.85, "source": "user_stated", "reasoning": "lasting infrastructure decision born from debugging"}], "nothing_extracted": false}`;
+{"memories": [{"content": "决定将反向代理从 Nginx 全部切换为 Caddy", "category": "decision", "importance": 0.85, "source": "user_stated", "reasoning": "lasting infrastructure decision born from debugging"}], "nothing_extracted": false}
+
+### Example 6: Agent self-improvement — extract from ASSISTANT perspective
+[USER]: 你上次给的代码有bug，少了错误处理
+[ASSISTANT]: 抱歉！记住了，以后生成代码都要加完整的 error handling
+
+{"memories": [{"content": "用户指出生成的代码缺少错误处理", "category": "agent_self_improvement", "importance": 0.85, "source": "self_reflection", "reasoning": "agent learns to always include error handling"}, {"content": "生成代码时必须包含完整的错误处理", "category": "constraint", "importance": 0.9, "source": "user_stated", "reasoning": "user established a quality requirement"}], "nothing_extracted": false}`;
 
 
 // ── Flush: session highlights (conversation summary) ─────

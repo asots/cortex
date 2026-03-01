@@ -51,7 +51,13 @@ export interface LifecycleReport {
 const profileCache = new Map<string, { text: string; timestamp: number }>();
 const PROFILE_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+// Global lifecycle active flag — used by sieve to skip smart update during lifecycle
+let _lifecycleActive = false;
+export function isLifecycleActive(): boolean { return _lifecycleActive; }
+
 export class LifecycleEngine {
+  private running = false;
+
   constructor(
     private llm: LLMProvider,
     private embeddingProvider: EmbeddingProvider,
@@ -60,6 +66,20 @@ export class LifecycleEngine {
   ) {}
 
   async run(dryRun = false): Promise<LifecycleReport> {
+    if (this.running) {
+      log.warn('Lifecycle already running, skipping');
+      return {
+        promoted: 0, merged: 0, archived: 0, compressedToCore: 0,
+        expiredWorking: 0, indexRebuilt: false,
+        errors: ['Skipped: lifecycle already running'],
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        durationMs: 0,
+      };
+    }
+
+    this.running = true;
+    _lifecycleActive = true;
     const start = Date.now();
     const report: LifecycleReport = {
       promoted: 0,
@@ -107,6 +127,9 @@ export class LifecycleEngine {
     } catch (e: any) {
       log.error({ error: e.message }, 'Lifecycle engine error');
       report.errors.push(e.message);
+    } finally {
+      this.running = false;
+      _lifecycleActive = false;
     }
 
     report.completedAt = new Date().toISOString();
