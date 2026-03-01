@@ -35,15 +35,18 @@ export default function LifecycleMonitor() {
     }).catch(() => {});
   }, []);
 
-  const handlePreview = async () => {
-    const result = await previewLifecycle();
-    setPreview(result);
+  const [previewing, setPreviewing] = useState(false);
 
-    // Load potentially affected working memories (low importance)
+  const handlePreview = async () => {
+    setPreviewing(true);
     try {
-      const res = await listMemories({ layer: 'working', limit: '20', offset: '0' });
-      setAffectedMemories(res.items || []);
-    } catch {}
+      const result = await previewLifecycle();
+      setPreview(result);
+      setAffectedMemories(result.affectedMemories || []);
+    } catch (e: any) {
+      alert(e.message);
+    }
+    setPreviewing(false);
   };
 
   const handleRun = async () => {
@@ -216,8 +219,10 @@ export default function LifecycleMonitor() {
 
       {/* Actions */}
       <div className="toolbar">
-        <button className="btn" onClick={handlePreview}>{t('lifecycle.preview')}</button>
-        <button className="btn primary" onClick={handleRun} disabled={running}>
+        <button className="btn" onClick={handlePreview} disabled={previewing || running}>
+          {previewing ? `${t('lifecycle.preview')}...` : t('lifecycle.preview')}
+        </button>
+        <button className="btn primary" onClick={handleRun} disabled={running || previewing}>
           {running ? t('common.running') : t('lifecycle.runNow')}
         </button>
       </div>
@@ -249,60 +254,44 @@ export default function LifecycleMonitor() {
             </div>
           </div>
 
-          {/* Show affected memories toggle */}
+          {/* Show affected memories from backend dry run */}
           {affectedMemories.length > 0 && (
             <div style={{ marginTop: 12 }}>
               <button className="btn" onClick={() => setShowAffected(!showAffected)} style={{ fontSize: 12 }}>
-                {showAffected ? t('lifecycle.hideWorking', { count: affectedMemories.length }) : t('lifecycle.showWorking', { count: affectedMemories.length })}
+                {showAffected
+                  ? t('lifecycle.hideAffected', { count: affectedMemories.length }) || `隐藏受影响记忆 (${affectedMemories.length})`
+                  : t('lifecycle.showAffected', { count: affectedMemories.length }) || `查看受影响记忆 (${affectedMemories.length})`
+                }
               </button>
               {showAffected && (
                 <div style={{ marginTop: 12, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
                   <table style={{ fontSize: 12 }}>
                     <thead>
-                      <tr><th>{t('lifecycle.contentCol')}</th><th>{t('lifecycle.importanceCol')}</th><th>{t('lifecycle.scoreCol') || '升级分'}</th><th>{t('lifecycle.ageCol')}</th><th>{t('lifecycle.likelyAction')}</th></tr>
+                      <tr>
+                        <th>{t('lifecycle.contentCol')}</th>
+                        <th>{t('lifecycle.categoryCol') || '分类'}</th>
+                        <th>{t('lifecycle.importanceCol')}</th>
+                        <th>{t('lifecycle.scoreCol') || '分数'}</th>
+                        <th>{t('lifecycle.likelyAction')}</th>
+                      </tr>
                     </thead>
                     <tbody>
                       {affectedMemories.map((m: any) => {
-                        const importance = m.importance ?? 0;
-                        const decay = m.decay_score ?? 1;
-                        const confidence = m.confidence ?? 0.5;
-                        const ageHours = (Date.now() - new Date(m.created_at).getTime()) / 3600000;
-                        const isExpired = m.expires_at && new Date(m.expires_at) < new Date();
-                        const promotionThreshold = config?.lifecycle?.promotionThreshold ?? 0.6;
-
-                        // Match server-side computePromotionScore exactly
-                        const BASE_IMP: Record<string, number> = {
-                          identity: 1.0, constraint: 1.0, preference: 0.9, correction: 0.9,
-                          agent_persona: 0.9, skill: 0.85, relationship: 0.85, agent_relationship: 0.85,
-                          goal: 0.8, agent_user_habit: 0.8, policy: 0.75, agent_self_improvement: 0.75,
-                          decision: 0.7, entity: 0.6, project_state: 0.6, insight: 0.55,
-                          fact: 0.5, summary: 0.4, todo: 0.3, context: 0.2,
+                        const actionMap: Record<string, { label: string; color: string }> = {
+                          promote: { label: '⬆️ ' + t('lifecycle.promote'), color: 'var(--success)' },
+                          expire: { label: '🗑️ ' + t('lifecycle.expire'), color: 'var(--danger)' },
+                          archive: { label: '📦 ' + (t('lifecycle.archiveAction') || '归档'), color: 'var(--warning)' },
+                          merge: { label: '🔗 ' + (t('lifecycle.mergeAction') || '合并'), color: 'var(--info)' },
+                          compress: { label: '📐 ' + (t('lifecycle.compressAction') || '压缩'), color: 'var(--info)' },
                         };
-                        const baseImp = BASE_IMP[m.category] || 0.5;
-                        const accessFactor = Math.log(1 + (m.access_count || 0)) / Math.log(11);
-                        const promotionScore = baseImp * 0.3 + accessFactor * 0.4 + importance * 0.3;
-
-                        let action = t('lifecycle.keep');
-                        let actionColor = 'var(--text-muted)';
-                        if (isExpired) {
-                          action = t('lifecycle.expire');
-                          actionColor = 'var(--danger)';
-                        } else if (ageHours < 24) {
-                          action = t('lifecycle.tooYoung') || '⏳ 不足24h';
-                        } else if (importance >= 0.9 && confidence >= 0.3) {
-                          action = `${t('lifecycle.promote')} ⚡`;
-                          actionColor = 'var(--success)';
-                        } else if (promotionScore >= promotionThreshold && confidence >= 0.3) {
-                          action = t('lifecycle.promote');
-                          actionColor = 'var(--success)';
-                        }
+                        const display = actionMap[m.action] || { label: m.action, color: 'var(--text-muted)' };
                         return (
                           <tr key={m.id}>
-                            <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.content}</td>
-                            <td>{importance.toFixed(2)}</td>
-                            <td title={`promotion: ${promotionScore.toFixed(2)}`}>{promotionScore.toFixed(2)}</td>
-                            <td style={{ whiteSpace: 'nowrap' }}>{toLocal(m.created_at, 'date')}</td>
-                            <td style={{ color: actionColor, fontWeight: 600, whiteSpace: 'nowrap' }}>{action}</td>
+                            <td style={{ maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.content}</td>
+                            <td style={{ whiteSpace: 'nowrap' }}>{m.category}</td>
+                            <td>{(m.importance ?? 0).toFixed(2)}</td>
+                            <td>{m.score != null ? m.score.toFixed(2) : '\u2014'}</td>
+                            <td style={{ color: display.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{display.label}</td>
                           </tr>
                         );
                       })}

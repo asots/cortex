@@ -34,6 +34,16 @@ const BASE_IMPORTANCE: Record<string, number> = {
   context:       0.2,
 };
 
+export interface AffectedMemory {
+  id: string;
+  content: string;
+  category: string;
+  importance: number;
+  action: 'promote' | 'expire' | 'archive' | 'merge' | 'compress';
+  score?: number;
+  reason?: string;
+}
+
 export interface LifecycleReport {
   promoted: number;
   merged: number;
@@ -45,6 +55,7 @@ export interface LifecycleReport {
   startedAt: string;
   completedAt: string;
   durationMs: number;
+  affectedMemories?: AffectedMemory[];
 }
 
 // In-memory profile cache: agentId -> { text, timestamp }
@@ -92,16 +103,17 @@ export class LifecycleEngine {
       startedAt: new Date().toISOString(),
       completedAt: '',
       durationMs: 0,
+      affectedMemories: dryRun ? [] : undefined,
     };
 
     try {
       // Phase 1: Clean expired Working memories
       log.info('Phase 1: cleanExpiredWorking');
-      report.expiredWorking = await this.cleanExpiredWorking(dryRun);
+      report.expiredWorking = await this.cleanExpiredWorking(dryRun, report.affectedMemories);
 
       // Phase 2: Working -> Core promotion
       log.info('Phase 2: promoteToCore');
-      report.promoted = await this.promoteToCore(dryRun);
+      report.promoted = await this.promoteToCore(dryRun, report.affectedMemories);
 
       // Phase 3: Core dedup and merge
       log.info('Phase 3: deduplicateCore');
@@ -109,7 +121,7 @@ export class LifecycleEngine {
 
       // Phase 4: Core -> Archive demotion
       log.info('Phase 4: archiveStale');
-      report.archived = await this.archiveStale(dryRun);
+      report.archived = await this.archiveStale(dryRun, report.affectedMemories);
 
       // Phase 5: Archive -> Core compression (never lose data)
       log.info('Phase 5: compressArchive');
@@ -155,11 +167,17 @@ export class LifecycleEngine {
     return this.run(true);
   }
 
-  private async cleanExpiredWorking(dryRun: boolean): Promise<number> {
+  private async cleanExpiredWorking(dryRun: boolean, affected?: AffectedMemory[]): Promise<number> {
     const db = getDb();
     const expired = db.prepare(
-      "SELECT id FROM memories WHERE layer = 'working' AND expires_at IS NOT NULL AND expires_at < datetime('now')"
-    ).all() as { id: string }[];
+      "SELECT id, content, category, importance FROM memories WHERE layer = 'working' AND expires_at IS NOT NULL AND expires_at < datetime('now')"
+    ).all() as { id: string; content: string; category: string; importance: number }[];
+
+    if (dryRun && affected) {
+      for (const e of expired) {
+        affected.push({ id: e.id, content: e.content, category: e.category, importance: e.importance, action: 'expire', reason: 'expired' });
+      }
+    }
 
     if (!dryRun && expired.length > 0) {
       const ids = expired.map(e => e.id);
@@ -183,7 +201,7 @@ export class LifecycleEngine {
     return expired.length;
   }
 
-  private async promoteToCore(dryRun: boolean): Promise<number> {
+  private async promoteToCore(dryRun: boolean, affected?: AffectedMemory[]): Promise<number> {
     const db = getDb();
     const threshold = this.config.lifecycle.promotionThreshold;
 
@@ -201,6 +219,9 @@ export class LifecycleEngine {
       // High-importance memories (identity, correction, constraint) auto-promote
       // BUT skip if confidence is too low (e.g. feedback=bad)
       if (entry.importance >= 0.9 && entry.confidence >= 0.3) {
+        if (dryRun && affected) {
+          affected.push({ id: entry.id, content: entry.content, category: entry.category, importance: entry.importance, action: 'promote', score: 1.0, reason: 'high_importance_auto' });
+        }
         if (!dryRun) {
           const newId = generateId();
           insertMemory({
@@ -227,6 +248,9 @@ export class LifecycleEngine {
 
       const score = this.computePromotionScore(entry);
       if (score >= threshold && entry.confidence >= 0.3) {
+        if (dryRun && affected) {
+          affected.push({ id: entry.id, content: entry.content, category: entry.category, importance: entry.importance, action: 'promote', score, reason: 'score_threshold' });
+        }
         if (!dryRun) {
           const newId = generateId();
           insertMemory({
@@ -334,7 +358,7 @@ export class LifecycleEngine {
     return intersection / (trigramsA.size + trigramsB.size - intersection);
   }
 
-  private async archiveStale(dryRun: boolean): Promise<number> {
+  private async archiveStale(dryRun: boolean, affected?: AffectedMemory[]): Promise<number> {
     const db = getDb();
     const threshold = this.config.lifecycle.archiveThreshold;
 
@@ -345,6 +369,9 @@ export class LifecycleEngine {
     let archived = 0;
     for (const entry of coreEntries) {
       if (entry.decay_score < threshold) {
+        if (dryRun && affected) {
+          affected.push({ id: entry.id, content: entry.content, category: entry.category, importance: entry.importance, action: 'archive', score: entry.decay_score, reason: 'low_decay' });
+        }
         if (!dryRun) {
           const archiveTtlMs = parseDuration(this.config.layers.archive.ttl);
           updateMemory(entry.id, {
