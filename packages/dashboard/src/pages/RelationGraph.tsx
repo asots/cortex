@@ -582,15 +582,15 @@ export default function RelationGraph() {
               {t('relations.deselect', { node: selectedNode })}
             </button>
           )}
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <button className="btn" onClick={fitToView} style={{ fontSize: 12, padding: '4px 10px' }}>
               {t('relations.fit')}
             </button>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
               <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />
               {t('relations.autoRefresh')}
             </label>
-            <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+            <span style={{ color: 'var(--text-muted)', fontSize: 13, whiteSpace: 'nowrap' }}>
               {t('relations.nodeEdgeCount', { nodes: nodeSet.size, edges: filteredRelations.length })}
             </span>
           </div>
@@ -666,10 +666,10 @@ export default function RelationGraph() {
       {filteredRelations.length === 0 ? (
         <div className="empty">{predicateFilter ? t('relations.noRelationsFiltered', { predicate: predicateFilter }) : t('relations.noRelations')}</div>
       ) : (
-        <div className="card">
-          <table>
+        <div className="card" style={{ overflowX: 'auto' }}>
+          <table style={{ minWidth: 700 }}>
             <thead>
-              <tr><th>{t('relations.subject')}</th><th>{t('relations.predicate')}</th><th>{t('relations.object')}</th><th>{t('relations.confidence')}</th><th>{t('relations.extractionCount')}</th><th>{t('relations.source')}</th><th>{t('relations.created')}</th><th></th></tr>
+              <tr><th>{t('relations.subject')}</th><th>{t('relations.predicate')}</th><th>{t('relations.object')}</th><th>{t('relations.confidence')}</th><th style={{ whiteSpace: 'nowrap' }}>{t('relations.extractionCount')}</th><th style={{ whiteSpace: 'nowrap' }}>{t('relations.source')}</th><th style={{ whiteSpace: 'nowrap' }}>{t('relations.created')}</th><th></th></tr>
             </thead>
             <tbody>
               {filteredRelations.map(r => (
