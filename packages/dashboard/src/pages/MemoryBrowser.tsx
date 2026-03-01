@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { listMemories, createMemory, updateMemory, deleteMemory, search, triggerImport } from '../api/client.js';
+import { listMemories, createMemory, updateMemory, deleteMemory, search, triggerImport, listAgents } from '../api/client.js';
 import MemoryDetail from './MemoryDetail.js';
 import { useI18n } from '../i18n/index.js';
 import { toLocal } from '../utils/time.js';
@@ -30,6 +30,8 @@ export default function MemoryBrowser() {
   const [total, setTotal] = useState(0);
   const [layer, setLayer] = useState('');
   const [category, setCategory] = useState('');
+  const [agentFilter, setAgentFilter] = useState('');
+  const [agents, setAgents] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchMode, setIsSearchMode] = useState(false);
   const [sortField, setSortField] = useState<SortField>('created_at');
@@ -63,6 +65,7 @@ export default function MemoryBrowser() {
         // Apply client-side filters
         if (layer) results = results.filter(m => m.layer === layer);
         if (category) results = results.filter(m => m.category === category);
+        if (agentFilter) results = results.filter(m => m.agent_id === agentFilter);
         // Sort
         results.sort((a: any, b: any) => {
           const va = a[sortField] ?? 0;
@@ -77,6 +80,7 @@ export default function MemoryBrowser() {
       const params: Record<string, string> = { limit: String(limit), offset: String(page * limit) };
       if (layer) params.layer = layer;
       if (category) params.category = category;
+      if (agentFilter) params.agent_id = agentFilter;
       listMemories(params).then((r: any) => {
         let items = r.items as Memory[];
         if (sortField !== 'created_at' || sortDir !== 'desc') {
@@ -91,9 +95,10 @@ export default function MemoryBrowser() {
         setTotal(r.total);
       });
     }
-  }, [layer, category, page, searchQuery, isSearchMode, sortField, sortDir]);
+  }, [layer, category, agentFilter, page, searchQuery, isSearchMode, sortField, sortDir]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { listAgents().then((res: any) => setAgents(res.agents || [])).catch(() => {}); }, []);
 
   const handleSearch = () => {
     if (searchQuery.trim()) {
@@ -281,6 +286,10 @@ export default function MemoryBrowser() {
         <select value={category} onChange={e => { setCategory(e.target.value); setPage(0); }}>
           <option value="">{t('memories.allCategories')}</option>
           {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select value={agentFilter} onChange={e => { setAgentFilter(e.target.value); setPage(0); }}>
+          <option value="">All Agents</option>
+          {agents.map((a: any) => <option key={a.id} value={a.id}>{a.name || a.id}</option>)}
         </select>
         <div style={{ display: 'flex', gap: 4, marginLeft: 8 }}>
           {(['created_at', 'importance', 'decay_score', 'access_count'] as SortField[]).map(f => (
