@@ -324,45 +324,43 @@ function AppContent() {
                     if (!confirm(locale === 'zh' ? `确认更新到 v${versionInfo.latestRelease!.version}？服务器将短暂重启。` : `Update to v${versionInfo.latestRelease!.version}? Server will restart briefly.`)) return;
                     setUpdating(true);
                     setUpdateResult(null);
-                    setUpdateCountdown(20);
+                    setUpdateCountdown(0);
+                    const target = versionInfo.latestRelease!.version;
                     try { await triggerUpdate(); } catch {}
-                    // Countdown
-                    let remaining = 20;
-                    const timer = setInterval(() => {
-                      remaining--;
-                      setUpdateCountdown(remaining);
-                      if (remaining <= 0) clearInterval(timer);
-                    }, 1000);
-                    // After countdown, check result
-                    setTimeout(async () => {
-                      clearInterval(timer);
-                      const target = versionInfo.latestRelease!.version;
-                      let found = false;
-                      for (let i = 0; i < 6; i++) {
-                        try {
-                          const h = await getHealth();
-                          if (h.version === target) {
-                            setUpdateResult('success');
-                            setUpdating(false);
-                            setTimeout(() => window.location.reload(), 1500);
-                            found = true;
-                            break;
-                          } else {
-                            setUpdateResult('stale');
-                            setUpdating(false);
-                            setVersionInfo({ version: h.version, github: h.github, latestRelease: h.latestRelease });
-                            found = true;
-                            break;
-                          }
-                        } catch {
-                          await new Promise(r => setTimeout(r, 3000));
+                    // Server will restart — poll until it comes back with new version
+                    // Wait a few seconds for the container to die first
+                    await new Promise(r => setTimeout(r, 5000));
+                    let elapsed = 5;
+                    const pollTimer = setInterval(() => { elapsed++; setUpdateCountdown(elapsed); }, 1000);
+                    let found = false;
+                    for (let i = 0; i < 30; i++) {
+                      try {
+                        const h = await getHealth();
+                        if (h.version === target) {
+                          clearInterval(pollTimer);
+                          setUpdateResult('success');
+                          setUpdating(false);
+                          setTimeout(() => window.location.reload(), 1000);
+                          found = true;
+                          break;
+                        } else if (h.version) {
+                          clearInterval(pollTimer);
+                          setUpdateResult('stale');
+                          setUpdating(false);
+                          setVersionInfo({ version: h.version, github: h.github, latestRelease: h.latestRelease });
+                          found = true;
+                          break;
                         }
+                      } catch {
+                        // Server still restarting, keep polling
                       }
-                      if (!found) {
-                        setUpdateResult('down');
-                        setUpdating(false);
-                      }
-                    }, 20000);
+                      await new Promise(r => setTimeout(r, 2000));
+                    }
+                    clearInterval(pollTimer);
+                    if (!found) {
+                      setUpdateResult('down');
+                      setUpdating(false);
+                    }
                   }}
                   style={{
                     display: 'block', width: '100%', fontSize: 11, padding: '3px 8px',
@@ -376,7 +374,7 @@ function AppContent() {
             {updating && (
               <div style={{ marginTop: 4 }}>
                 <div style={{ fontSize: 11, marginBottom: 3, textAlign: 'center' }}>
-                  {locale === 'zh' ? `⏳ 更新中... ${updateCountdown}s` : `⏳ Updating... ${updateCountdown}s`}
+                  {locale === 'zh' ? `⏳ 重启中... ${updateCountdown}s` : `⏳ Restarting... ${updateCountdown}s`}
                 </div>
                 <div style={{ height: 3, background: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
                   <div style={{
