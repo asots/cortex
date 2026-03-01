@@ -523,6 +523,16 @@ export default {
     toastReindexStarted: 'Reindex started...',
     toastReindexComplete: 'Reindex complete: {{indexed}}/{{total}} indexed ({{errors}} errors)',
     toastReindexFailed: 'Reindex failed: {{message}}',
+
+    // Markdown Export section
+    markdownExportTitle: 'Markdown Export',
+    markdownExportEnabled: 'Auto Export',
+    markdownExportEnabledDesc: 'Automatically export memories to Markdown files after each ingest. Core → MEMORY.md, Working → daily files, Archive → monthly files.',
+    markdownExportDebounceMs: 'Debounce Time',
+    markdownExportDebounceMsDesc: 'Wait time after the last ingest before exporting. Prevents excessive writes when multiple memories are ingested in quick succession.',
+    markdownExportDebounceTip: '{{minutes}} min — if multiple ingests happen within this window, only one export runs after the last one.',
+    markdownExportMemoryMd: 'Export MEMORY.md',
+    markdownExportMemoryMdDesc: 'Include Core layer memories in the exported MEMORY.md file.',
     toastConfigSaved: 'Configuration saved successfully',
     toastSaveFailed: 'Save failed: {{message}}',
     importConfig: 'Import',

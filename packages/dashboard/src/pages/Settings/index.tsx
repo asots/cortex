@@ -18,6 +18,7 @@ import LifecycleSection from './sections/LifecycleSection.js';
 import LayersSection from './sections/LayersSection.js';
 import GateSection from './sections/GateSection.js';
 import SieveSection from './sections/SieveSection.js';
+import MarkdownExportSection from './sections/MarkdownExportSection.js';
 import DataManagement from './sections/DataManagement.js';
 
 export default function Settings() {
@@ -138,6 +139,11 @@ export default function Settings() {
         similarityThreshold: config.sieve?.similarityThreshold ?? 0.35,
         exactDupThreshold: config.sieve?.exactDupThreshold ?? 0.08,
         relationExtraction: config.sieve?.relationExtraction ?? true,
+      }),
+      markdownExport: () => ({
+        enabled: config.markdownExport?.enabled ?? true,
+        exportMemoryMd: config.markdownExport?.exportMemoryMd ?? true,
+        debounceMs: config.markdownExport?.debounceMs ?? 300000,
       }),
     };
 
@@ -296,6 +302,12 @@ export default function Settings() {
           similarityThreshold: Number(draft.similarityThreshold),
           exactDupThreshold: Number(draft.exactDupThreshold),
           relationExtraction: draft.relationExtraction,
+        };
+      } else if (section === 'markdownExport') {
+        payload.markdownExport = {
+          enabled: draft.enabled,
+          exportMemoryMd: draft.exportMemoryMd,
+          debounceMs: Number(draft.debounceMs),
         };
       }
 
@@ -869,6 +881,18 @@ export default function Settings() {
         renderToggleField={renderToggleField}
         renderNumberField={renderNumberField}
         renderSlider={renderSlider}
+        t={t}
+      />
+
+      <MarkdownExportSection
+        config={config}
+        editing={isEditing('markdownExport')}
+        sectionHeader={sectionHeader}
+        displayRow={displayRow}
+        renderToggleField={renderToggleField}
+        renderNumberField={renderNumberField}
+        draft={draft}
+        updateDraft={updateDraft}
         t={t}
       />
 

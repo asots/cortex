@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { getStats, getDb } from '../db/index.js';
 import { getConfig, updateConfig } from '../utils/config.js';
+import { restartLifecycleScheduler } from '../core/scheduler.js';
 import { createLogger } from '../utils/logger.js';
 import { metrics } from '../utils/metrics.js';
 import type { CortexApp } from '../app.js';
@@ -206,6 +207,10 @@ export function registerSystemRoutes(app: FastifyInstance, cortex: CortexApp): v
     const body = req.body as any;
     const updated = updateConfig(body);
     const reloaded = cortex.reloadProviders(updated);
+    // Restart lifecycle scheduler if schedule changed
+    if (body.lifecycle?.schedule !== undefined) {
+      restartLifecycleScheduler(cortex);
+    }
     return { ok: true, config: updated, reloaded_providers: reloaded };
   });
 

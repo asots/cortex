@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { CortexApp } from '../app.js';
 import { insertExtractionLog } from '../core/extraction-log.js';
+import { triggerMarkdownExport } from '../core/scheduler.js';
 import { ensureAgent } from '../db/index.js';
 
 export function registerIngestRoutes(app: FastifyInstance, cortex: CortexApp): void {
@@ -47,6 +48,8 @@ export function registerIngestRoutes(app: FastifyInstance, cortex: CortexApp): v
     }
 
     reply.code(201);
+    // Trigger debounced markdown export after successful ingest
+    triggerMarkdownExport(cortex);
     return result;
   });
 }

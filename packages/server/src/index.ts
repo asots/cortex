@@ -10,6 +10,7 @@ import { initDatabase, closeDatabase } from './db/index.js';
 import { CortexApp } from './app.js';
 import { registerAllRoutes } from './api/router.js';
 import { registerAuthRoutes, registerAuthMiddleware, registerRateLimiting, registerInputLimits } from './api/security.js';
+import { startLifecycleScheduler, stopLifecycleScheduler } from './core/scheduler.js';
 
 const log = createLogger('server');
 
@@ -84,6 +85,9 @@ async function main() {
   try {
     await app.listen({ port: config.port, host: config.host });
     log.info({ port: config.port, host: config.host }, 'Cortex server is running');
+
+    // Start lifecycle scheduler
+    startLifecycleScheduler(cortex);
   } catch (err) {
     log.fatal(err, 'Failed to start server');
     process.exit(1);
@@ -92,6 +96,7 @@ async function main() {
   // 6. Graceful shutdown
   const shutdown = async () => {
     log.info('Shutting down...');
+    stopLifecycleScheduler();
     await app.close();
     await cortex.shutdown();
     closeDatabase();

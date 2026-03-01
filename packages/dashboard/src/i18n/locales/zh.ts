@@ -523,6 +523,16 @@ export default {
     toastReindexStarted: '重建索引开始...',
     toastReindexComplete: '重建索引完成：{{indexed}}/{{total}} 已索引（{{errors}} 个错误）',
     toastReindexFailed: '重建索引失败：{{message}}',
+
+    // Markdown Export section
+    markdownExportTitle: 'Markdown 导出',
+    markdownExportEnabled: '自动导出',
+    markdownExportEnabledDesc: '每次记忆写入后自动导出为 Markdown 文件。核心层 → MEMORY.md，工作层 → 每日文件，归档层 → 每月文件。',
+    markdownExportDebounceMs: '防抖时间',
+    markdownExportDebounceMsDesc: '最后一次写入后等待多久再导出。避免短时间内多次写入导致频繁导出。',
+    markdownExportDebounceTip: '{{minutes}} 分钟 — 如果在此窗口内连续写入多条记忆，只会在最后一条之后导出一次。',
+    markdownExportMemoryMd: '导出 MEMORY.md',
+    markdownExportMemoryMdDesc: '将核心层记忆包含在导出的 MEMORY.md 文件中。',
     toastConfigSaved: '配置保存成功',
     toastSaveFailed: '保存失败：{{message}}',
     importConfig: '导入',
