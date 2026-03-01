@@ -96,24 +96,31 @@ export class LifecycleEngine {
 
     try {
       // Phase 1: Clean expired Working memories
+      log.info('Phase 1: cleanExpiredWorking');
       report.expiredWorking = await this.cleanExpiredWorking(dryRun);
 
       // Phase 2: Working -> Core promotion
+      log.info('Phase 2: promoteToCore');
       report.promoted = await this.promoteToCore(dryRun);
 
       // Phase 3: Core dedup and merge
+      log.info('Phase 3: deduplicateCore');
       report.merged = await this.deduplicateCore(dryRun);
 
       // Phase 4: Core -> Archive demotion
+      log.info('Phase 4: archiveStale');
       report.archived = await this.archiveStale(dryRun);
 
       // Phase 5: Archive -> Core compression (never lose data)
+      log.info('Phase 5: compressArchive');
       report.compressedToCore = await this.compressArchive(dryRun);
 
       // Phase 6: Update decay scores
+      log.info('Phase 6: updateDecayScores');
       await this.updateDecayScores();
 
       // Phase 6b: Decay stale relation confidences
+      log.info('Phase 6b: updateRelationDecay');
       await this.updateRelationDecay();
 
       // Phase 7: Synthesize user profiles for all agents
@@ -125,7 +132,7 @@ export class LifecycleEngine {
 
       report.indexRebuilt = true;
     } catch (e: any) {
-      log.error({ error: e.message }, 'Lifecycle engine error');
+      log.error({ error: e.message, stack: e.stack }, 'Lifecycle engine error');
       report.errors.push(e.message);
     } finally {
       this.running = false;
@@ -156,14 +163,16 @@ export class LifecycleEngine {
 
     if (!dryRun && expired.length > 0) {
       const ids = expired.map(e => e.id);
-      // Nullify FK references before deleting to avoid FOREIGN KEY constraint errors
+      // Nullify/delete FK references before deleting to avoid FOREIGN KEY constraint errors
+      const deleteAccessLog = db.prepare('DELETE FROM access_log WHERE memory_id = ?');
       const nullifyRelations = db.prepare('UPDATE relations SET source_memory_id = NULL WHERE source_memory_id = ?');
       const nullifyEvidence = db.prepare('UPDATE relation_evidence SET memory_id = NULL WHERE memory_id = ?');
       const stmt = db.prepare('DELETE FROM memories WHERE id = ?');
       db.transaction(() => {
         for (const id of ids) {
+          deleteAccessLog.run(id);
           nullifyRelations.run(id);
-          try { nullifyEvidence.run(id); } catch { /* table may not exist */ }
+          try { nullifyEvidence.run(id); } catch { /* table may not exist in older schemas */ }
           stmt.run(id);
         }
       })();
