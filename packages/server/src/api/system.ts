@@ -178,6 +178,11 @@ export function registerSystemRoutes(app: FastifyInstance, cortex: CortexApp): v
     const config = getConfig();
     return {
       ...config,
+      serverInfo: {
+        time: new Date().toISOString(),
+        timezone: process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+        uptime: Math.floor(process.uptime()),
+      },
       llm: {
         extraction: {
           provider: config.llm.extraction.provider,

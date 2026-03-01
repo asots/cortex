@@ -29,7 +29,8 @@ export function startLifecycleScheduler(cortex: CortexApp): void {
   }
 
   try {
-    lifecycleCron = new Cron(schedule, { timezone: 'UTC' }, async () => {
+    const tz = process.env.TZ || 'UTC';
+    lifecycleCron = new Cron(schedule, { timezone: tz }, async () => {
       log.info({ schedule }, 'Lifecycle cron triggered');
       try {
         const report = await cortex.lifecycle.run();
@@ -48,7 +49,7 @@ export function startLifecycleScheduler(cortex: CortexApp): void {
     });
 
     const next = lifecycleCron.nextRun();
-    log.info({ schedule, nextRun: next?.toISOString() }, 'Lifecycle scheduler started');
+    log.info({ schedule, timezone: tz, nextRun: next?.toISOString() }, 'Lifecycle scheduler started');
   } catch (e: any) {
     log.error({ error: e.message, schedule }, 'Failed to start lifecycle scheduler (invalid cron?)');
   }

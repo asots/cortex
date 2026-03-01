@@ -156,8 +156,17 @@ export class LifecycleEngine {
 
     if (!dryRun && expired.length > 0) {
       const ids = expired.map(e => e.id);
+      // Nullify FK references before deleting to avoid FOREIGN KEY constraint errors
+      const nullifyRelations = db.prepare('UPDATE relations SET source_memory_id = NULL WHERE source_memory_id = ?');
+      const nullifyEvidence = db.prepare('UPDATE relation_evidence SET memory_id = NULL WHERE memory_id = ?');
       const stmt = db.prepare('DELETE FROM memories WHERE id = ?');
-      db.transaction(() => { for (const id of ids) stmt.run(id); })();
+      db.transaction(() => {
+        for (const id of ids) {
+          nullifyRelations.run(id);
+          try { nullifyEvidence.run(id); } catch { /* table may not exist */ }
+          stmt.run(id);
+        }
+      })();
       await this.vectorBackend.delete(ids);
       insertLifecycleLog('expire_working', ids);
     }

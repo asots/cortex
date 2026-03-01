@@ -41,7 +41,7 @@ COPY --from=builder /app/packages/dashboard/dist packages/dashboard/dist/
 ENV NODE_ENV=production
 ENV CORTEX_HOST=0.0.0.0
 ENV CORTEX_PORT=21100
-ENV TZ=UTC
+ENV TZ=Asia/Tokyo
 
 EXPOSE 21100
 

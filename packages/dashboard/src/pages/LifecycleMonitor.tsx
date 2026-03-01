@@ -168,7 +168,7 @@ export default function LifecycleMonitor() {
       {preview && (
         <div className="card" style={{ marginBottom: 16 }}>
           <h3 style={{ marginBottom: 12 }}>{t('lifecycle.previewTitle', { count: totalOps })}</h3>
-          <div className="card-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))' }}>
+          <div className="card-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))' }}>
             <div className="stat-card">
               <div className="label">{t('lifecycle.wouldPromote')}</div>
               <div className="value" style={{ color: 'var(--success)' }}>{preview.promoted}</div>
@@ -198,7 +198,7 @@ export default function LifecycleMonitor() {
                 {showAffected ? t('lifecycle.hideWorking', { count: affectedMemories.length }) : t('lifecycle.showWorking', { count: affectedMemories.length })}
               </button>
               {showAffected && (
-                <div style={{ marginTop: 12 }}>
+                <div style={{ marginTop: 12, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
                   <table style={{ fontSize: 12 }}>
                     <thead>
                       <tr><th>{t('lifecycle.contentCol')}</th><th>{t('lifecycle.importanceCol')}</th><th>{t('lifecycle.decayCol')}</th><th>{t('lifecycle.ageCol')}</th><th>{t('lifecycle.likelyAction')}</th></tr>
@@ -234,7 +234,7 @@ export default function LifecycleMonitor() {
       {runResult && (
         <div className="card" style={{ marginBottom: 16, borderColor: 'var(--success)' }}>
           <h3 style={{ marginBottom: 12 }}>{t('lifecycle.lastRunResult')}</h3>
-          <div className="card-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))' }}>
+          <div className="card-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))' }}>
             <div className="stat-card"><div className="label">{t('lifecycle.promoted')}</div><div className="value">{runResult.promoted}</div></div>
             <div className="stat-card"><div className="label">{t('lifecycle.merged')}</div><div className="value">{runResult.merged}</div></div>
             <div className="stat-card"><div className="label">{t('lifecycle.archived')}</div><div className="value">{runResult.archived}</div></div>
@@ -270,21 +270,28 @@ export default function LifecycleMonitor() {
         {logs.length === 0 ? (
           <div className="empty">{t('lifecycle.noEvents')}</div>
         ) : (
+          <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <table>
             <thead>
-              <tr><th>{t('lifecycle.action')}</th><th>{t('lifecycle.memoryIds')}</th><th>{t('lifecycle.details')}</th><th>{t('lifecycle.time')}</th></tr>
+              <tr>
+                <th>{t('lifecycle.action')}</th>
+                <th>{t('lifecycle.memoryIds')}</th>
+                <th>{t('lifecycle.details')}</th>
+                <th style={{ whiteSpace: 'nowrap' }}>{t('lifecycle.time')}</th>
+              </tr>
             </thead>
             <tbody>
               {logs.map((log: any) => (
                 <tr key={log.id}>
-                  <td><span className="badge" style={{ background: 'rgba(99,102,241,0.2)', color: '#818cf8' }}>{log.action}</span></td>
-                  <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{log.memory_ids}</td>
-                  <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{log.details || '\u2014'}</td>
-                  <td>{toLocal(log.executed_at)}</td>
+                  <td><span className="badge" style={{ background: 'rgba(99,102,241,0.2)', color: '#818cf8', whiteSpace: 'nowrap' }}>{log.action}</span></td>
+                  <td style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{log.memory_ids}</td>
+                  <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{log.details || '\u2014'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{toLocal(log.executed_at)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>

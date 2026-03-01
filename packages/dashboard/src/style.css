@@ -404,6 +404,7 @@ input:focus, textarea:focus, select:focus {
 
   table { font-size: 13px; }
   th, td { padding: 8px 6px; }
+  .card { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
   .modal { width: 95%; padding: 16px; }
 

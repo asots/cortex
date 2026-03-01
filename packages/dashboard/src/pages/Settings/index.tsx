@@ -21,6 +21,15 @@ import SieveSection from './sections/SieveSection.js';
 import MarkdownExportSection from './sections/MarkdownExportSection.js';
 import DataManagement from './sections/DataManagement.js';
 
+function formatUptime(seconds: number): string {
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
 export default function Settings() {
   const [config, setConfig] = useState<any>(null);
   const [error, setError] = useState('');
@@ -809,6 +818,13 @@ export default function Settings() {
             <tr><td>{t('settings.host')}</td><td>{config.host}</td></tr>
             <tr><td>{t('settings.dbPath')}</td><td>{config.storage?.dbPath}</td></tr>
             <tr><td>{t('settings.walMode')}</td><td>{config.storage?.walMode ? t('common.on') : t('common.off')}</td></tr>
+            {config.serverInfo && (
+              <>
+                <tr><td>{t('settings.serverTimezone')}</td><td>{config.serverInfo.timezone}</td></tr>
+                <tr><td>{t('settings.serverTime')}</td><td>{new Date(config.serverInfo.time).toLocaleString()}</td></tr>
+                <tr><td>{t('settings.serverUptime')}</td><td>{formatUptime(config.serverInfo.uptime)}</td></tr>
+              </>
+            )}
           </tbody>
         </table>
       </div>
