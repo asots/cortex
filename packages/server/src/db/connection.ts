@@ -56,14 +56,46 @@ function runMigrations(db: Database.Database): void {
     db.prepare('SELECT name FROM _migrations').all().map((r: any) => r.name)
   );
 
-  for (const migration of migrations) {
-    if (!applied.has(migration.name)) {
-      log.info({ migration: migration.name }, 'Applying migration');
-      db.transaction(() => {
-        db.exec(migration.sql);
-        db.prepare('INSERT INTO _migrations (name) VALUES (?)').run(migration.name);
-      })();
+  // Check if any new migrations need to be applied
+  const pending = migrations.filter(m => !applied.has(m.name));
+  if (pending.length === 0) return;
+
+  // Pre-migration: integrity check
+  const integrityResult = db.pragma('integrity_check') as any[];
+  if (integrityResult[0]?.integrity_check !== 'ok') {
+    log.error({ result: integrityResult }, 'Database integrity check FAILED before migration');
+    throw new Error('Database integrity check failed — aborting migration');
+  }
+
+  // Pre-migration: backup database
+  const dbPath = (db as any).name as string;
+  if (dbPath && dbPath !== ':memory:') {
+    const backupPath = `${dbPath}.backup-${Date.now()}`;
+    try {
+      db.backup(backupPath);
+      log.info({ backupPath }, `Pre-migration backup created (${pending.length} migrations pending)`);
+
+      // Cleanup old backups, keep latest 3
+      const dir = path.dirname(dbPath);
+      const baseName = path.basename(dbPath);
+      const backups = fs.readdirSync(dir)
+        .filter(f => f.startsWith(`${baseName}.backup-`))
+        .sort()
+        .reverse();
+      for (const old of backups.slice(3)) {
+        try { fs.unlinkSync(path.join(dir, old)); } catch { /* ignore */ }
+      }
+    } catch (e: any) {
+      log.warn({ error: e.message }, 'Failed to create pre-migration backup (continuing anyway)');
     }
+  }
+
+  for (const migration of pending) {
+    log.info({ migration: migration.name }, 'Applying migration');
+    db.transaction(() => {
+      db.exec(migration.sql);
+      db.prepare('INSERT INTO _migrations (name) VALUES (?)').run(migration.name);
+    })();
   }
 }
 
