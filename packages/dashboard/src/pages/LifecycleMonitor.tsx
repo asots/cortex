@@ -48,19 +48,23 @@ export default function LifecycleMonitor() {
   useEffect(() => {
     getConfig().then(setConfig).catch(() => {});
     listAgents().then((res: any) => setAgents(res.agents || res || [])).catch(() => {});
-    // Get layer stats
+  }, []);
+
+  // Reload logs + layer stats when agent changes
+  const refreshData = () => {
+    getLifecycleLogs(30, agentId || undefined).then(setLogs);
+    const agentParam: Record<string, string> = agentId ? { agent_id: agentId } : {};
     Promise.all([
-      listMemories({ layer: 'working', limit: '1', offset: '0' }),
-      listMemories({ layer: 'core', limit: '1', offset: '0' }),
-      listMemories({ layer: 'archive', limit: '1', offset: '0' }),
+      listMemories({ layer: 'working', limit: '1', offset: '0', ...agentParam }),
+      listMemories({ layer: 'core', limit: '1', offset: '0', ...agentParam }),
+      listMemories({ layer: 'archive', limit: '1', offset: '0', ...agentParam }),
     ]).then(([w, c, a]: any[]) => {
       setLayerStats({ working: w.total, core: c.total, archive: a.total });
     }).catch(() => {});
-  }, []);
+  };
 
-  // Reload logs when agent changes
   useEffect(() => {
-    getLifecycleLogs(30, agentId || undefined).then(setLogs);
+    refreshData();
   }, [agentId]);
 
   const [previewing, setPreviewing] = useState(false);
@@ -83,15 +87,7 @@ export default function LifecycleMonitor() {
     try {
       const result = await runLifecycle(false, agentId || undefined);
       setRunResult(result);
-      getLifecycleLogs(30, agentId || undefined).then(setLogs);
-      // Refresh layer stats
-      Promise.all([
-        listMemories({ layer: 'working', limit: '1', offset: '0' }),
-        listMemories({ layer: 'core', limit: '1', offset: '0' }),
-        listMemories({ layer: 'archive', limit: '1', offset: '0' }),
-      ]).then(([w, c, a]: any[]) => {
-        setLayerStats({ working: w.total, core: c.total, archive: a.total });
-      }).catch(() => {});
+      refreshData();
     } catch (e: any) {
       alert(e.message);
     }

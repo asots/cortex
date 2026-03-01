@@ -39,6 +39,7 @@ export default function ExtractionLogs() {
   const [channel, setChannel] = useState('');
   const [loading, setLoading] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [totalCount, setTotalCount] = useState(0);
   const { t } = useI18n();
 
   useEffect(() => {
@@ -57,6 +58,7 @@ export default function ExtractionLogs() {
     try {
       const res = await getExtractionLogs(agentId || undefined, { limit: 100, channel: channel || undefined });
       setLogs(res.items || []);
+      setTotalCount(res.total ?? res.items?.length ?? 0);
     } catch {
       setLogs([]);
     }
@@ -98,7 +100,7 @@ export default function ExtractionLogs() {
       {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 16 }}>
         <div className="card" style={{ padding: 12, textAlign: 'center' }}>
-          <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text)' }}>{logs.length}</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--text)' }}>{totalCount}</div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('extractionLogs.totalLogs')}</div>
         </div>
         <div className="card" style={{ padding: 12, textAlign: 'center' }}>
