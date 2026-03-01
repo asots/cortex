@@ -391,6 +391,7 @@ export default {
     contentCol: 'Content',
     importanceCol: 'Importance',
     decayCol: 'Decay',
+    scoreCol: 'Score',
     ageCol: 'Age',
     likelyAction: 'Likely Action',
     keep: 'Keep',

@@ -259,7 +259,7 @@ export default function LifecycleMonitor() {
                 <div style={{ marginTop: 12, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
                   <table style={{ fontSize: 12 }}>
                     <thead>
-                      <tr><th>{t('lifecycle.contentCol')}</th><th>{t('lifecycle.importanceCol')}</th><th>{t('lifecycle.decayCol')}</th><th>{t('lifecycle.ageCol')}</th><th>{t('lifecycle.likelyAction')}</th></tr>
+                      <tr><th>{t('lifecycle.contentCol')}</th><th>{t('lifecycle.importanceCol')}</th><th>{t('lifecycle.scoreCol') || '升级分'}</th><th>{t('lifecycle.ageCol')}</th><th>{t('lifecycle.likelyAction')}</th></tr>
                     </thead>
                     <tbody>
                       {affectedMemories.map((m: any) => {
@@ -270,26 +270,37 @@ export default function LifecycleMonitor() {
                         const isExpired = m.expires_at && new Date(m.expires_at) < new Date();
                         const promotionThreshold = config?.lifecycle?.promotionThreshold ?? 0.6;
 
+                        // Match server-side computePromotionScore exactly
+                        const BASE_IMP: Record<string, number> = {
+                          identity: 1.0, constraint: 1.0, preference: 0.9, correction: 0.9,
+                          agent_persona: 0.9, skill: 0.85, relationship: 0.85, agent_relationship: 0.85,
+                          goal: 0.8, agent_user_habit: 0.8, policy: 0.75, agent_self_improvement: 0.75,
+                          decision: 0.7, entity: 0.6, project_state: 0.6, insight: 0.55,
+                          fact: 0.5, summary: 0.4, todo: 0.3, context: 0.2,
+                        };
+                        const baseImp = BASE_IMP[m.category] || 0.5;
+                        const accessFactor = Math.log(1 + (m.access_count || 0)) / Math.log(11);
+                        const promotionScore = baseImp * 0.3 + accessFactor * 0.4 + importance * 0.3;
+
                         let action = t('lifecycle.keep');
                         let actionColor = 'var(--text-muted)';
                         if (isExpired) {
                           action = t('lifecycle.expire');
                           actionColor = 'var(--danger)';
-                        } else if (ageHours >= 24 && importance >= 0.9 && confidence >= 0.3) {
-                          action = `${t('lifecycle.promote')} ⚡`;
-                          actionColor = 'var(--success)';
-                        } else if (ageHours >= 24 && importance >= promotionThreshold && confidence >= 0.3) {
-                          action = t('lifecycle.promote');
-                          actionColor = 'var(--success)';
                         } else if (ageHours < 24) {
                           action = t('lifecycle.tooYoung') || '⏳ 不足24h';
-                          actionColor = 'var(--text-muted)';
+                        } else if (importance >= 0.9 && confidence >= 0.3) {
+                          action = `${t('lifecycle.promote')} ⚡`;
+                          actionColor = 'var(--success)';
+                        } else if (promotionScore >= promotionThreshold && confidence >= 0.3) {
+                          action = t('lifecycle.promote');
+                          actionColor = 'var(--success)';
                         }
                         return (
                           <tr key={m.id}>
                             <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.content}</td>
                             <td>{importance.toFixed(2)}</td>
-                            <td>{decay.toFixed(3)}</td>
+                            <td title={`promotion: ${promotionScore.toFixed(2)}`}>{promotionScore.toFixed(2)}</td>
                             <td style={{ whiteSpace: 'nowrap' }}>{toLocal(m.created_at, 'date')}</td>
                             <td style={{ color: actionColor, fontWeight: 600, whiteSpace: 'nowrap' }}>{action}</td>
                           </tr>

@@ -391,6 +391,7 @@ export default {
     contentCol: '内容',
     importanceCol: '重要性',
     decayCol: '衰减',
+    scoreCol: '升级分',
     ageCol: '创建日期',
     likelyAction: '可能操作',
     keep: '保留',
