@@ -72,6 +72,8 @@ export default {
     confidence: '置信度',
     systemHealth: '系统健康',
     componentStatus: '组件状态',
+    recallTester: '记忆搜索测试',
+    recallPlaceholder: '输入查询测试 recall 效果...',
     status: '状态',
     version: '版本',
     uptime: '运行时间',

@@ -461,6 +461,10 @@ const migrations = [
       CREATE INDEX IF NOT EXISTS idx_extraction_feedback_agent ON extraction_feedback(agent_id);
     `,
   },
+  {
+    name: '010_extraction_error_column',
+    sql: `ALTER TABLE extraction_logs ADD COLUMN error TEXT;`,
+  },
 ];
 
 export function closeDatabase(): void {
@@ -468,5 +472,32 @@ export function closeDatabase(): void {
     _db.close();
     _db = null;
     log.info('Database closed');
+  }
+}
+
+export function backupDb(): string | null {
+  const db = getDb();
+  const config = getConfig();
+  const dbPath = path.resolve(config.dataDir, 'brain.db');
+  const dir = path.dirname(dbPath);
+  const baseName = path.basename(dbPath);
+  const backupPath = `${dbPath}.daily-${new Date().toISOString().slice(0, 10)}`;
+
+  try {
+    db.backup(backupPath);
+    log.info({ backupPath }, 'Daily backup created');
+
+    // Keep latest 7 daily backups
+    const backups = fs.readdirSync(dir)
+      .filter(f => f.startsWith(`${baseName}.daily-`))
+      .sort()
+      .reverse();
+    for (const old of backups.slice(7)) {
+      try { fs.unlinkSync(path.join(dir, old)); } catch {}
+    }
+    return backupPath;
+  } catch (e: any) {
+    log.warn({ error: e.message }, 'Daily backup failed');
+    return null;
   }
 }

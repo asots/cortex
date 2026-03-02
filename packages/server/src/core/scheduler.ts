@@ -10,6 +10,7 @@ import { Cron } from 'croner';
 import type { CortexApp } from '../app.js';
 import type { CortexConfig } from '../utils/config.js';
 import { createLogger } from '../utils/logger.js';
+import { backupDb } from '../db/connection.js';
 
 const log = createLogger('scheduler');
 
@@ -42,6 +43,7 @@ export function startLifecycleScheduler(cortex: CortexApp): void {
     const tz = process.env.TZ || 'UTC';
     lifecycleCron = new Cron(schedule, { timezone: tz }, async () => {
       log.info({ schedule }, 'Lifecycle cron triggered');
+      try { backupDb(); } catch (e: any) { log.warn({ error: e.message }, 'Pre-lifecycle backup failed'); }
       try {
         const report = await cortex.lifecycle.run(false, 'scheduled');
         log.info(

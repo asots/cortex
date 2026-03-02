@@ -157,6 +157,7 @@ export default function ExtractionLogs() {
                   <span style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                     {log.memories_written}w / {log.memories_deduped}d
                   </span>
+                  {log.error && <span style={{ fontSize: 11, color: '#ef4444', whiteSpace: 'nowrap' }} title={log.error}>❌ 错误</span>}
                   <span style={{ fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                     {log.latency_ms}ms
                   </span>
@@ -173,6 +174,14 @@ export default function ExtractionLogs() {
                         {log.exchange_preview || '—'}
                       </div>
                     </div>
+
+                    {/* Error */}
+                    {log.error && (
+                      <div style={{ marginBottom: 12, padding: 10, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6 }}>
+                        <div style={{ fontWeight: 600, color: '#ef4444', marginBottom: 4 }}>❌ 错误详情</div>
+                        <div style={{ fontSize: 12, color: '#fca5a5', fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{log.error}</div>
+                      </div>
+                    )}
 
                     {/* Raw LLM output */}
                     {log.raw_output && (

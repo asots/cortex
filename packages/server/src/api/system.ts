@@ -251,6 +251,42 @@ export function registerSystemRoutes(app: FastifyInstance, cortex: CortexApp): v
     return { components };
   });
 
+  // Test connections
+  app.post('/api/v1/health/test', async () => {
+    const config = getConfig();
+    const results: Record<string, { ok: boolean; latencyMs: number; error?: string }> = {};
+
+    // Test LLM
+    try {
+      const start = Date.now();
+      const { default: Anthropic } = await import('@anthropic-ai/sdk');
+      const client = new Anthropic({
+        apiKey: config.llm.apiKey || process.env.ANTHROPIC_API_KEY,
+        baseURL: config.llm.baseUrl || undefined,
+      });
+      await client.messages.create({
+        model: config.llm.model || 'claude-sonnet-4-20250514',
+        max_tokens: 10,
+        messages: [{ role: 'user', content: 'ping' }],
+      });
+      results.llm = { ok: true, latencyMs: Date.now() - start };
+    } catch (e: any) {
+      results.llm = { ok: false, latencyMs: 0, error: e.message?.slice(0, 200) };
+    }
+
+    // Test Embedding
+    try {
+      const start = Date.now();
+      const emb = await cortex.embeddingProvider.embed('test connection');
+      results.embedding = { ok: emb.length > 0, latencyMs: Date.now() - start };
+      if (emb.length === 0) results.embedding.error = 'Empty embedding returned';
+    } catch (e: any) {
+      results.embedding = { ok: false, latencyMs: 0, error: e.message?.slice(0, 200) };
+    }
+
+    return results;
+  });
+
   // Stats
   app.get('/api/v1/stats', async (req) => {
     const q = req.query as any;

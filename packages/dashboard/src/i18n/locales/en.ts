@@ -72,6 +72,8 @@ export default {
     confidence: 'Confidence',
     systemHealth: 'System Health',
     componentStatus: 'Component Status',
+    recallTester: 'Recall Tester',
+    recallPlaceholder: 'Enter a query to test recall quality...',
     status: 'Status',
     version: 'Version',
     uptime: 'Uptime',

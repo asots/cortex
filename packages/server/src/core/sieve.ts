@@ -41,6 +41,7 @@ export interface ExtractionLogData {
   memories_deduped: number;
   memories_smart_updated: number;
   latency_ms: number;
+  error?: string;
 }
 
 export interface IngestRequest {
@@ -225,6 +226,7 @@ export class MemorySieve {
     const start = Date.now();
     let rawOutput = '';
     let extractedRelations: ExtractedRelation[] = [];
+    let extractionError: string | undefined;
 
     try {
       const profileContext = this.config.sieve.profileInjection
@@ -235,6 +237,7 @@ export class MemorySieve {
       structuredExtractions = result.parsed;
       extractedRelations = result.relations;
     } catch (e: any) {
+      extractionError = e.message;
       log.warn({ error: e.message }, 'Deep channel: LLM extraction failed');
     }
 
@@ -311,6 +314,7 @@ export class MemorySieve {
         memories_deduped: deduplicated,
         memories_smart_updated: smart_updated,
         latency_ms: latency,
+        error: extractionError,
       },
     };
   }

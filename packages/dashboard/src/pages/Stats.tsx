@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { getStats, getHealth, getComponentHealth, listMemories } from '../api/client.js';
+import { getStats, getHealth, getComponentHealth, listMemories, testConnections, testRecall } from '../api/client.js';
 import { useI18n } from '../i18n/index.js';
 
 function fmtNum(n: number): string {
@@ -194,6 +194,11 @@ export default function Stats() {
   const [error, setError] = useState('');
   const [allMemories, setAllMemories] = useState<any[]>([]);
   const [components, setComponents] = useState<any[]>([]);
+  const [connTest, setConnTest] = useState<any>(null);
+  const [testing, setTesting] = useState(false);
+  const [recallQuery, setRecallQuery] = useState('');
+  const [recallResults, setRecallResults] = useState<any[]|null>(null);
+  const [recalling, setRecalling] = useState(false);
   const { t } = useI18n();
 
   useEffect(() => {
@@ -323,7 +328,31 @@ export default function Stats() {
       {/* Component Status */}
       {components.length > 0 && (
         <div className="card">
-          <h3 style={{ marginBottom: 12 }}>{t('stats.componentStatus')}</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h3 style={{ margin: 0 }}>{t('stats.componentStatus')}</h3>
+            <button
+              onClick={async () => {
+                setTesting(true); setConnTest(null);
+                try { setConnTest(await testConnections()); } catch (e: any) { setConnTest({ _error: e.message }); }
+                setTesting(false);
+              }}
+              disabled={testing}
+              style={{ fontSize: 11, padding: '4px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', color: 'var(--text)' }}
+            >
+              {testing ? '⏳ 测试中...' : '🔌 测试连接'}
+            </button>
+          </div>
+          {connTest && !connTest._error && (
+            <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+              {Object.entries(connTest).map(([key, val]: [string, any]) => (
+                <div key={key} style={{ fontSize: 12, padding: '6px 12px', borderRadius: 6, background: val.ok ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${val.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}` }}>
+                  <span style={{ fontWeight: 600 }}>{key.toUpperCase()}</span>
+                  {' '}{val.ok ? `✅ ${val.latencyMs}ms` : `❌ ${val.error || '失败'}`}
+                </div>
+              ))}
+            </div>
+          )}
+          {connTest?._error && <div style={{ color: '#ef4444', fontSize: 12, marginBottom: 12 }}>❌ {connTest._error}</div>}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
             {components.map((c: any) => {
               const statusColor = c.status === 'ok' ? '#22c55e' : c.status === 'warning' ? '#f59e0b' : c.status === 'error' ? '#ef4444' : c.status === 'stopped' ? '#ef4444' : c.status === 'not_configured' ? '#71717a' : '#71717a';
@@ -370,6 +399,57 @@ export default function Stats() {
           </div>
         </div>
       )}
+
+      {/* Recall Tester */}
+      <div className="card">
+        <h3 style={{ marginBottom: 12 }}>🔍 {t('stats.recallTester')}</h3>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <input
+            type="text"
+            value={recallQuery}
+            onChange={e => setRecallQuery(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && recallQuery.trim()) {
+                setRecalling(true);
+                testRecall(recallQuery).then(r => { setRecallResults(r.memories || r.results || r); setRecalling(false); }).catch(() => setRecalling(false));
+              }
+            }}
+            placeholder={t('stats.recallPlaceholder')}
+            style={{ flex: 1, fontSize: 13, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
+          />
+          <button
+            disabled={recalling || !recallQuery.trim()}
+            onClick={async () => {
+              setRecalling(true);
+              try { const r = await testRecall(recallQuery); setRecallResults(r.memories || r.results || r); } catch { setRecallResults([]); }
+              setRecalling(false);
+            }}
+            style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, cursor: 'pointer', background: 'var(--primary)', color: '#fff', border: 'none' }}
+          >
+            {recalling ? '...' : '搜索'}
+          </button>
+        </div>
+        {recallResults !== null && (
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+              返回 {recallResults.length} 条结果
+            </div>
+            {recallResults.map((m: any, i: number) => (
+              <div key={m.id || i} style={{ padding: '8px 12px', marginBottom: 4, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ fontWeight: 600 }}>{m.category}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    {m.distance != null ? `距离 ${Number(m.distance).toFixed(3)}` : ''}
+                    {m.importance != null ? ` · 重要度 ${m.importance}` : ''}
+                    {m.layer ? ` · ${m.layer}` : ''}
+                  </span>
+                </div>
+                <div style={{ color: 'var(--text)', lineHeight: 1.4 }}>{m.content}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

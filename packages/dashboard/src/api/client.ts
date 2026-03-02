@@ -176,3 +176,11 @@ export const getExtractionLogs = (agentId?: string, opts?: { limit?: number; off
   if (opts?.channel) params.set('channel', opts.channel);
   return request(`/extraction-logs?${params}`);
 };
+
+// Test connections
+export const testConnections = () =>
+  request('/health/test', { method: 'POST' });
+
+// Search/Recall test
+export const testRecall = (query: string, agentId?: string) =>
+  request('/recall', { method: 'POST', body: JSON.stringify({ query, agent_id: agentId, limit: 10 }) });

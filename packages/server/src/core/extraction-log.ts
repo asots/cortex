@@ -22,8 +22,8 @@ export function insertExtractionLog(
     const id = generateId();
 
     db.prepare(`
-      INSERT INTO extraction_logs (id, agent_id, session_id, exchange_preview, channel, raw_output, parsed_memories, memories_written, memories_deduped, memories_smart_updated, latency_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO extraction_logs (id, agent_id, session_id, exchange_preview, channel, raw_output, parsed_memories, memories_written, memories_deduped, memories_smart_updated, latency_ms, error)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       agentId,
@@ -36,6 +36,7 @@ export function insertExtractionLog(
       data.memories_deduped,
       data.memories_smart_updated ?? 0,
       data.latency_ms,
+      data.error || null,
     );
 
     return id;

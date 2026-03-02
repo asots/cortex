@@ -142,6 +142,19 @@ export class LifecycleEngine {
         log.warn({ error: e.message }, 'Profile synthesis failed during lifecycle run');
       }
 
+      // Phase 8: Clean old access logs (keep 30 days)
+      log.info('Phase 8: cleanAccessLogs');
+      try {
+        const cutoff = new Date(Date.now() - 30 * 86400_000).toISOString();
+        const result = db.prepare("DELETE FROM access_log WHERE accessed_at < ?").run(cutoff);
+        if (result.changes > 0) {
+          log.info({ deleted: result.changes }, 'Cleaned old access logs');
+        }
+        (report as any).accessLogsCleaned = result.changes;
+      } catch (e: any) {
+        log.warn({ error: e.message }, 'Access log cleanup failed');
+      }
+
       report.indexRebuilt = true;
     } catch (e: any) {
       log.error({ error: e.message, stack: e.stack }, 'Lifecycle engine error');
