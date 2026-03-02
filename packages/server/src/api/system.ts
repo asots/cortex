@@ -30,6 +30,16 @@ function getPackageVersion(): string {
 }
 
 const CURRENT_VERSION = getPackageVersion();
+
+/** Returns true if `latest` is strictly newer than `current` (semver comparison) */
+function isNewerVersion(latest: string, current: string): boolean {
+  const parse = (v: string) => v.replace(/^v/, '').split('.').map(Number);
+  const [lM, lm, lp] = parse(latest);
+  const [cM, cm, cp] = parse(current);
+  if (lM !== cM) return lM > cM;
+  if (lm !== cm) return lm > cm;
+  return (lp || 0) > (cp || 0);
+}
 const GITHUB_REPO = 'rikouu/cortex';
 const GITHUB_URL = `https://github.com/${GITHUB_REPO}`;
 
@@ -85,7 +95,7 @@ export function registerSystemRoutes(app: FastifyInstance, cortex: CortexApp): v
         version: latestVersion,
         url: latest.url,
         publishedAt: latest.publishedAt,
-        updateAvailable: latestVersion ? latestVersion !== CURRENT_VERSION : false,
+        updateAvailable: latestVersion ? isNewerVersion(latestVersion, CURRENT_VERSION) : false,
       } : null,
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
