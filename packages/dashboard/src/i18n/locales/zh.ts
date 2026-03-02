@@ -71,6 +71,7 @@ export default {
     decayScore: '衰减分数',
     confidence: '置信度',
     systemHealth: '系统健康',
+    componentStatus: '组件状态',
     status: '状态',
     version: '版本',
     uptime: '运行时间',

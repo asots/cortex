@@ -167,6 +167,90 @@ export function registerSystemRoutes(app: FastifyInstance, cortex: CortexApp): v
       return { ok: false, error: e.message };
     }
   });
+  // Component health status
+  app.get('/api/v1/health/components', async () => {
+    const db = getDb();
+    const config = getConfig();
+    const components: any[] = [];
+
+    // 1. Extraction LLM
+    try {
+      const last = db.prepare(`SELECT channel, created_at, latency_ms, memories_written, memories_deduped FROM extraction_logs ORDER BY created_at DESC LIMIT 1`).get() as any;
+      const errorCount = (db.prepare(`SELECT COUNT(*) as c FROM extraction_logs WHERE memories_written = 0 AND created_at > datetime('now', '-24 hours')`).get() as any)?.c || 0;
+      const totalLast24h = (db.prepare(`SELECT COUNT(*) as c FROM extraction_logs WHERE created_at > datetime('now', '-24 hours')`).get() as any)?.c || 0;
+      components.push({
+        id: 'extraction_llm',
+        name: 'Extraction LLM',
+        status: last ? 'ok' : 'unknown',
+        lastRun: last?.created_at || null,
+        latencyMs: last?.latency_ms || null,
+        details: {
+          channel: last?.channel,
+          memoriesWritten: last?.memories_written,
+          last24h: totalLast24h,
+          errorsLast24h: errorCount,
+        },
+      });
+    } catch { components.push({ id: 'extraction_llm', name: 'Extraction LLM', status: 'error' }); }
+
+    // 2. Lifecycle Engine
+    try {
+      const last = db.prepare(`SELECT action, executed_at, details FROM lifecycle_log WHERE action = 'lifecycle_run' ORDER BY executed_at DESC LIMIT 1`).get() as any;
+      let details: any = {};
+      try { details = last?.details ? JSON.parse(last.details) : {}; } catch {}
+      const hasErrors = details.errors && details.errors.length > 0;
+      components.push({
+        id: 'lifecycle',
+        name: 'Lifecycle Engine',
+        status: last ? (hasErrors ? 'warning' : 'ok') : 'unknown',
+        lastRun: last?.executed_at || null,
+        latencyMs: details.durationMs || null,
+        details: {
+          trigger: details.trigger,
+          promoted: details.promoted,
+          archived: details.archived,
+          expired: details.expiredWorking,
+          errors: details.errors?.length || 0,
+        },
+      });
+    } catch { components.push({ id: 'lifecycle', name: 'Lifecycle Engine', status: 'error' }); }
+
+    // 3. Embedding Service
+    try {
+      // Check if embedding is configured
+      const hasEmbedding = !!(config.embedding?.baseUrl || config.embedding?.apiKey || process.env.OPENAI_API_KEY);
+      const lastAccess = db.prepare(`SELECT accessed_at FROM access_log ORDER BY accessed_at DESC LIMIT 1`).get() as any;
+      components.push({
+        id: 'embedding',
+        name: 'Embedding',
+        status: hasEmbedding ? (lastAccess ? 'ok' : 'unknown') : 'not_configured',
+        lastRun: lastAccess?.accessed_at || null,
+        details: {
+          model: config.embedding?.model || 'default',
+          configured: hasEmbedding,
+        },
+      });
+    } catch { components.push({ id: 'embedding', name: 'Embedding', status: 'error' }); }
+
+    // 4. Scheduler
+    try {
+      const { getSchedulerStatus } = await import('../core/scheduler.js');
+      const sched = getSchedulerStatus();
+      components.push({
+        id: 'scheduler',
+        name: 'Scheduler',
+        status: sched.running ? 'ok' : 'stopped',
+        details: {
+          schedule: sched.schedule,
+          nextRun: sched.nextRun,
+          running: sched.running,
+        },
+      });
+    } catch { components.push({ id: 'scheduler', name: 'Scheduler', status: 'unknown' }); }
+
+    return { components };
+  });
+
   // Stats
   app.get('/api/v1/stats', async (req) => {
     const q = req.query as any;

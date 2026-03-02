@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { getStats, getHealth, listMemories } from '../api/client.js';
+import { getStats, getHealth, getComponentHealth, listMemories } from '../api/client.js';
 import { useI18n } from '../i18n/index.js';
 
 function fmtNum(n: number): string {
@@ -7,6 +7,15 @@ function fmtNum(n: number): string {
   if (n >= 10_000) return (n / 10_000).toFixed(1).replace(/\.0$/, '') + '万';
   if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'k';
   return String(n);
+}
+
+function timeAgo(dateStr: string, future = false): string {
+  const diff = future ? new Date(dateStr).getTime() - Date.now() : Date.now() - new Date(dateStr).getTime();
+  const abs = Math.abs(diff);
+  if (abs < 60_000) return future ? '即将' : '刚刚';
+  if (abs < 3600_000) return Math.floor(abs / 60_000) + '分钟' + (future ? '后' : '前');
+  if (abs < 86400_000) return Math.floor(abs / 3600_000) + '小时' + (future ? '后' : '前');
+  return Math.floor(abs / 86400_000) + '天' + (future ? '后' : '前');
 }
 
 // ─── Mini Canvas Bar Chart ──────────────────────────────────────────────────
@@ -184,12 +193,17 @@ export default function Stats() {
   const [health, setHealth] = useState<any>(null);
   const [error, setError] = useState('');
   const [allMemories, setAllMemories] = useState<any[]>([]);
+  const [components, setComponents] = useState<any[]>([]);
   const { t } = useI18n();
 
   useEffect(() => {
     Promise.all([getStats(), getHealth()])
       .then(([s, h]) => { setStats(s); setHealth(h); })
       .catch(e => setError(e.message));
+
+    getComponentHealth()
+      .then((r: any) => setComponents(r.components || []))
+      .catch(() => {});
 
     // Load sample memories for distribution histograms
     listMemories({ limit: '500', offset: '0' })
@@ -294,16 +308,66 @@ export default function Stats() {
 
       {/* System Health */}
       {health && (
-        <div className="card">
+        <div className="card" style={{ marginBottom: 16 }}>
           <h3 style={{ marginBottom: 12 }}>{t('stats.systemHealth')}</h3>
           <table>
             <tbody>
               <tr><td>{t('stats.status')}</td><td><span style={{ color: health.status === 'ok' ? 'var(--success)' : 'var(--danger)' }}>● {health.status}</span></td></tr>
               <tr><td>{t('stats.version')}</td><td>{health.version}</td></tr>
               <tr><td>{t('stats.uptime')}</td><td>{formatUptime(health.uptime)}</td></tr>
-              <tr><td>{t('stats.timestamp')}</td><td>{health.timestamp}</td></tr>
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Component Status */}
+      {components.length > 0 && (
+        <div className="card">
+          <h3 style={{ marginBottom: 12 }}>{t('stats.componentStatus')}</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
+            {components.map((c: any) => {
+              const statusColor = c.status === 'ok' ? '#22c55e' : c.status === 'warning' ? '#f59e0b' : c.status === 'error' ? '#ef4444' : c.status === 'stopped' ? '#ef4444' : c.status === 'not_configured' ? '#71717a' : '#71717a';
+              const statusLabel = c.status === 'ok' ? '✅ 正常' : c.status === 'warning' ? '⚠️ 警告' : c.status === 'error' ? '❌ 错误' : c.status === 'stopped' ? '⏹ 停止' : c.status === 'not_configured' ? '⚙️ 未配置' : '❓ 未知';
+              const ago = c.lastRun ? timeAgo(c.lastRun) : null;
+              return (
+                <div key={c.id} style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: 14 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</span>
+                    <span style={{ color: statusColor, fontSize: 12, fontWeight: 600 }}>{statusLabel}</span>
+                  </div>
+                  {ago && (
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>
+                      上次运行: {ago}
+                    </div>
+                  )}
+                  {c.latencyMs != null && (
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>
+                      延迟: {c.latencyMs}ms
+                    </div>
+                  )}
+                  {c.details && (
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      {c.id === 'extraction_llm' && <>
+                        通道: {c.details.channel} · 24h: {c.details.last24h}次
+                        {c.details.errorsLast24h > 0 && <span style={{ color: '#ef4444' }}> · 错误: {c.details.errorsLast24h}</span>}
+                      </>}
+                      {c.id === 'lifecycle' && <>
+                        触发: {c.details.trigger === 'scheduled' ? '⏰定时' : c.details.trigger === 'manual' ? '👆手动' : c.details.trigger || '-'}
+                        {' · '}升级: {c.details.promoted ?? 0} · 归档: {c.details.archived ?? 0}
+                      </>}
+                      {c.id === 'embedding' && <>
+                        模型: {c.details.model}
+                      </>}
+                      {c.id === 'scheduler' && <>
+                        计划: {c.details.schedule || '-'}
+                        {c.details.nextRun && <> · 下次: {timeAgo(c.details.nextRun, true)}</>}
+                      </>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

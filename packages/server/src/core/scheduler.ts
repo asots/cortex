@@ -15,6 +15,16 @@ const log = createLogger('scheduler');
 
 let lifecycleCron: Cron | null = null;
 
+export function getSchedulerStatus(): { running: boolean; schedule: string | null; nextRun: string | null } {
+  if (!lifecycleCron) return { running: false, schedule: null, nextRun: null };
+  const next = lifecycleCron.nextRun();
+  return {
+    running: true,
+    schedule: lifecycleCron.getPattern() || null,
+    nextRun: next ? next.toISOString() : null,
+  };
+}
+
 /**
  * Start the lifecycle cron job based on config.lifecycle.schedule.
  * Safe to call multiple times — stops previous job first.

@@ -71,6 +71,7 @@ export default {
     decayScore: 'Decay Score',
     confidence: 'Confidence',
     systemHealth: 'System Health',
+    componentStatus: 'Component Status',
     status: 'Status',
     version: 'Version',
     uptime: 'Uptime',

@@ -63,6 +63,7 @@ async function request(path: string, opts?: RequestInit) {
 
 // Health
 export const getHealth = () => request('/health');
+export const getComponentHealth = () => request('/health/components');
 
 // Stats
 export const getStats = (agentId?: string) =>
