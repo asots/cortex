@@ -35,6 +35,10 @@ const CortexConfigSchema = z.object({
   host: z.string().default('127.0.0.1'),
   auth: z.object({
     token: z.string().optional(),
+    agents: z.array(z.object({
+      agent_id: z.string(),
+      token: z.string(),
+    })).optional(),
   }).default({}),
   cors: z.object({
     origin: z.union([z.string(), z.array(z.string()), z.boolean()]).default(false),
@@ -166,7 +170,14 @@ export function loadConfig(overrides?: Partial<CortexConfig>): CortexConfig {
   if (process.env.CORTEX_PORT) envOverrides.port = parseInt(process.env.CORTEX_PORT);
   if (process.env.CORTEX_HOST) envOverrides.host = process.env.CORTEX_HOST;
   if (process.env.CORTEX_DB_PATH) envOverrides.storage = { dbPath: process.env.CORTEX_DB_PATH };
-  if (process.env.CORTEX_AUTH_TOKEN) envOverrides.auth = { token: process.env.CORTEX_AUTH_TOKEN };
+  if (process.env.CORTEX_AUTH_TOKEN) {
+    // Preserve existing auth.agents from file config when applying env override
+    const existingAuth = (fileConfig as any)?.auth;
+    envOverrides.auth = {
+      token: process.env.CORTEX_AUTH_TOKEN,
+      ...(existingAuth?.agents ? { agents: existingAuth.agents } : {}),
+    };
+  }
 
   // 3. Merge and validate
   const merged = { ...fileConfig, ...envOverrides, ...overrides };

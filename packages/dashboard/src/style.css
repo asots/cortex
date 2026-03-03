@@ -327,6 +327,7 @@ input:focus, textarea:focus, select:focus {
   font-size: 12px;
   overflow-x: auto;
   white-space: pre-wrap;
+  word-break: break-all;
   max-height: 300px;
   overflow-y: auto;
 }

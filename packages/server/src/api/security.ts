@@ -10,37 +10,91 @@ function safeCompare(a: string, b: string): boolean {
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
+// ============ Auth Types ============
+
+export interface AgentToken {
+  agent_id: string;
+  token: string;
+}
+
+export interface AuthConfig {
+  token?: string;           // Master token (access all agents)
+  agents?: AgentToken[];    // Per-agent tokens
+}
+
+/** Result of token resolution */
+export interface TokenInfo {
+  isMaster: boolean;
+  agentId?: string;  // Bound agent_id (undefined for master)
+}
+
 // ============ Auth Routes ============
 
-export function registerAuthRoutes(app: FastifyInstance, token?: string): void {
+export function registerAuthRoutes(app: FastifyInstance, authConfig: AuthConfig): void {
+  const hasAuth = !!(authConfig.token || (authConfig.agents && authConfig.agents.length > 0));
+
   // Public: check if auth is enabled (no token required)
   app.get('/api/v1/auth/check', async () => {
-    return { authRequired: !!token };
+    return { authRequired: hasAuth };
   });
 
   // Public: verify a token
   app.post('/api/v1/auth/verify', async (req) => {
-    if (!token) {
-      return { valid: true };
+    if (!hasAuth) {
+      return { valid: true, isMaster: true };
     }
     const body = req.body as any;
     const provided = body?.token;
-    if (provided && safeCompare(provided, token)) {
-      return { valid: true };
+    if (!provided) return { valid: false };
+
+    const info = resolveToken(provided, authConfig);
+    if (info) {
+      return { valid: true, isMaster: info.isMaster, agentId: info.agentId };
     }
     return { valid: false };
   });
 }
 
+// ============ Token Resolution ============
+
+/** Resolve a bearer token to its identity. Returns null if invalid. */
+function resolveToken(provided: string, authConfig: AuthConfig): TokenInfo | null {
+  // Check master token first
+  if (authConfig.token && safeCompare(provided, authConfig.token)) {
+    return { isMaster: true };
+  }
+
+  // Check agent tokens
+  if (authConfig.agents) {
+    for (const agentToken of authConfig.agents) {
+      if (safeCompare(provided, agentToken.token)) {
+        return { isMaster: false, agentId: agentToken.agent_id };
+      }
+    }
+  }
+
+  return null;
+}
+
 // ============ Auth Middleware ============
 
-export function registerAuthMiddleware(app: FastifyInstance, token?: string): void {
-  if (!token) {
+// Extend Fastify request to carry auth info
+declare module 'fastify' {
+  interface FastifyRequest {
+    tokenInfo?: TokenInfo;
+  }
+}
+
+export function registerAuthMiddleware(app: FastifyInstance, authConfig: AuthConfig): void {
+  const hasAuth = !!(authConfig.token || (authConfig.agents && authConfig.agents.length > 0));
+
+  if (!hasAuth) {
     log.info('Auth token not configured, API authentication disabled');
     return;
   }
 
-  log.info('API Bearer token authentication enabled');
+  const agentCount = authConfig.agents?.length ?? 0;
+  log.info({ agentTokens: agentCount }, 'API Bearer token authentication enabled');
 
   app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     // Skip health check and auth routes (public)
@@ -56,15 +110,74 @@ export function registerAuthMiddleware(app: FastifyInstance, token?: string): vo
     }
 
     const provided = authHeader.slice(7);
-    if (!safeCompare(provided, token)) {
+    const info = resolveToken(provided, authConfig);
+
+    if (!info) {
       log.warn({ ip: req.ip, url: req.url }, 'Invalid auth token');
       reply.code(403).send({ error: 'Forbidden', message: 'Invalid token' });
       return;
     }
+
+    // Attach token info to request for downstream agent_id enforcement
+    req.tokenInfo = info;
   });
 }
 
-// ============ Rate Limiting ============
+// ============ Agent ID Enforcement ============
+
+/**
+ * Register a preHandler hook that enforces agent_id access control.
+ * - Master tokens can access any agent_id
+ * - Agent tokens can only access their bound agent_id
+ * - If agent token and no agent_id in request, auto-inject it
+ */
+export function registerAgentEnforcement(app: FastifyInstance, authConfig: AuthConfig): void {
+  const hasAgentTokens = authConfig.agents && authConfig.agents.length > 0;
+  if (!hasAgentTokens && !authConfig.token) return;
+
+  app.addHook('preHandler', async (req: FastifyRequest, reply: FastifyReply) => {
+    // Only enforce on API routes
+    if (!req.url.startsWith('/api/')) return;
+    // Skip auth/health/system routes
+    if (req.url.startsWith('/api/v1/auth/')) return;
+    if (req.url === '/api/v1/health') return;
+
+    const tokenInfo = req.tokenInfo;
+    if (!tokenInfo) return; // No auth configured or public route
+
+    // Master token: no restrictions
+    if (tokenInfo.isMaster) return;
+
+    // Agent token: enforce agent_id binding
+    const boundAgentId = tokenInfo.agentId;
+    if (!boundAgentId) return;
+
+    // Extract agent_id from request body or query
+    const body = (req.body as Record<string, unknown>) || {};
+    const query = (req.query as Record<string, unknown>) || {};
+    const requestAgentId = (body.agent_id as string) || (query.agent_id as string);
+
+    if (requestAgentId) {
+      // Verify it matches the bound agent_id
+      if (requestAgentId !== boundAgentId) {
+        log.warn(
+          { ip: req.ip, url: req.url, requested: requestAgentId, bound: boundAgentId },
+          'Agent token tried to access unauthorized agent_id',
+        );
+        reply.code(403).send({
+          error: 'Forbidden',
+          message: `Token is bound to agent "${boundAgentId}", cannot access agent "${requestAgentId}"`,
+        });
+        return;
+      }
+    } else {
+      // Auto-inject agent_id for agent tokens
+      if (body && typeof body === 'object') {
+        (body as any).agent_id = boundAgentId;
+      }
+    }
+  });
+}
 
 // ============ Input Size Limits ============
 

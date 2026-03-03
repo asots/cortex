@@ -9,7 +9,7 @@ import { loadConfig, createLogger } from './utils/index.js';
 import { initDatabase, closeDatabase } from './db/index.js';
 import { CortexApp } from './app.js';
 import { registerAllRoutes } from './api/router.js';
-import { registerAuthRoutes, registerAuthMiddleware, registerRateLimiting, registerInputLimits } from './api/security.js';
+import { registerAuthRoutes, registerAuthMiddleware, registerAgentEnforcement, registerRateLimiting, registerInputLimits } from './api/security.js';
 import { startLifecycleScheduler, stopLifecycleScheduler } from './core/scheduler.js';
 
 const log = createLogger('server');
@@ -37,11 +37,18 @@ async function main() {
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 
+  // Auth config
+  const authConfig = {
+    token: config.auth?.token,
+    agents: config.auth?.agents,
+  };
+
   // Auth routes (public, must be before auth middleware)
-  registerAuthRoutes(app, config.auth?.token);
+  registerAuthRoutes(app, authConfig);
 
   // Security middleware
-  registerAuthMiddleware(app, config.auth?.token);
+  registerAuthMiddleware(app, authConfig);
+  registerAgentEnforcement(app, authConfig);
   registerInputLimits(app);
   if (config.rateLimit?.enabled !== false) {
     registerRateLimiting(app, {

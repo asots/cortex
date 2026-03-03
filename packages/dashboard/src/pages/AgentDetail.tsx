@@ -502,25 +502,19 @@ export default function AgentDetail() {
           step={2}
           title={t('agentDetail.apiStep2Title')}
           description={t('agentDetail.apiStep2Desc')}
-          code={`curl -X POST ${cortexUrl}/api/v1/ingest \\
-  -H "Content-Type: application/json" \\
-  -d '{"user_message":"...","assistant_message":"...","agent_id":"${agentId}"}'`}
+          code={`curl -X POST ${cortexUrl}/api/v1/ingest \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer YOUR_TOKEN" \\\n  -d '{\n    "user_message": "...",\n    "assistant_message": "...",\n    "agent_id": "${agentId}"\n  }'`}
         />
         <StepBlock
           step={3}
           title={t('agentDetail.apiStep3Title')}
           description={t('agentDetail.apiStep3Desc')}
-          code={`curl -X POST ${cortexUrl}/api/v1/recall \\
-  -H "Content-Type: application/json" \\
-  -d '{"query":"What are the user preferences?","agent_id":"${agentId}"}'`}
+          code={`curl -X POST ${cortexUrl}/api/v1/recall \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer YOUR_TOKEN" \\\n  -d '{\n    "query": "What are the user preferences?",\n    "agent_id": "${agentId}"\n  }'`}
         />
         <StepBlock
           step={4}
           title={t('agentDetail.apiStep4Title')}
           description={t('agentDetail.apiStep4Desc')}
-          code={`curl -X POST ${cortexUrl}/api/v1/memories \\
-  -H "Content-Type: application/json" \\
-  -d '{"layer":"core","category":"fact","content":"...","agent_id":"${agentId}","importance":0.8}'`}
+          code={`curl -X POST ${cortexUrl}/api/v1/memories \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer YOUR_TOKEN" \\\n  -d '{\n    "layer": "core",\n    "category": "fact",\n    "content": "...",\n    "agent_id": "${agentId}",\n    "importance": 0.8\n  }'`}
         />
         <StepBlock
           step={5}
@@ -528,11 +522,15 @@ export default function AgentDetail() {
           description={t('agentDetail.apiStep5Desc')}
           code={`const CORTEX_URL = '${cortexUrl}';
 const AGENT_ID = '${agentId}';
+const AUTH_TOKEN = 'YOUR_TOKEN';
 
 async function recall(query: string) {
   const res = await fetch(\`\${CORTEX_URL}/api/v1/recall\`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': \`Bearer \${AUTH_TOKEN}\`,
+    },
     body: JSON.stringify({ query, agent_id: AGENT_ID }),
   });
   return res.json();
@@ -541,8 +539,15 @@ async function recall(query: string) {
 async function ingest(userMessage: string, assistantMessage: string) {
   const res = await fetch(\`\${CORTEX_URL}/api/v1/ingest\`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_message: userMessage, assistant_message: assistantMessage, agent_id: AGENT_ID }),
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': \`Bearer \${AUTH_TOKEN}\`,
+    },
+    body: JSON.stringify({
+      user_message: userMessage,
+      assistant_message: assistantMessage,
+      agent_id: AGENT_ID,
+    }),
   });
   return res.json();
 }`}
@@ -552,16 +557,32 @@ async function ingest(userMessage: string, assistantMessage: string) {
           title={t('agentDetail.apiStep6Title')}
           description={t('agentDetail.apiStep6Desc')}
           code={`import requests
+
 CORTEX_URL = "${cortexUrl}"
 AGENT_ID = "${agentId}"
+AUTH_TOKEN = "YOUR_TOKEN"
+HEADERS = {
+    "Content-Type": "application/json",
+    "Authorization": f"Bearer {AUTH_TOKEN}",
+}
 
 def recall(query: str):
-    return requests.post(f"{CORTEX_URL}/api/v1/recall",
-        json={"query": query, "agent_id": AGENT_ID}).json()
+    return requests.post(
+        f"{CORTEX_URL}/api/v1/recall",
+        headers=HEADERS,
+        json={"query": query, "agent_id": AGENT_ID},
+    ).json()
 
 def ingest(user_msg: str, assistant_msg: str):
-    return requests.post(f"{CORTEX_URL}/api/v1/ingest",
-        json={"user_message": user_msg, "assistant_message": assistant_msg, "agent_id": AGENT_ID}).json()`}
+    return requests.post(
+        f"{CORTEX_URL}/api/v1/ingest",
+        headers=HEADERS,
+        json={
+            "user_message": user_msg,
+            "assistant_message": assistant_msg,
+            "agent_id": AGENT_ID,
+        },
+    ).json()`}
           isLast
         />
       </div>
@@ -698,17 +719,28 @@ def ingest(user_msg: str, assistant_msg: str):
           title={t('agentDetail.openclawStep2Title')}
           description={t('agentDetail.openclawStep2Desc')}
         >
-          {/* Method A: .env */}
+          {/* Method A: openclaw.json (recommended) */}
           <div style={{ marginBottom: 16, padding: 14, background: 'var(--bg)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('agentDetail.openclawJsonMethod')}</div>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 8px 0' }}>{t('agentDetail.openclawJsonMethodDesc')}</p>
+            <CodeSnippet title="openclaw.json" code={`{
+  "plugins": {
+    "cortex-bridge": {
+      "enabled": true,
+      "config": {
+        "cortexUrl": "${cortexUrl}",
+        "authToken": "YOUR_TOKEN",
+        "agentId": "${agentId}"
+      }
+    }
+  }
+}`} />
+          </div>
+          {/* Method B: .env */}
+          <div style={{ padding: 14, background: 'var(--bg)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('agentDetail.openclawEnvMethod')}</div>
             <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 8px 0' }}>{t('agentDetail.openclawEnvMethodDesc')}</p>
-            <CodeSnippet title=".env" code={`CORTEX_URL=${cortexUrl}`} />
-          </div>
-          {/* Method B: shell */}
-          <div style={{ padding: 14, background: 'var(--bg)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('agentDetail.openclawShellMethod')}</div>
-            <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 8px 0' }}>{t('agentDetail.openclawShellMethodDesc')}</p>
-            <CodeSnippet title="~/.zshrc / ~/.bashrc" code={`echo 'export CORTEX_URL=${cortexUrl}' >> ~/.zshrc`} />
+            <CodeSnippet title=".env" code={`CORTEX_URL=${cortexUrl}\nCORTEX_AUTH_TOKEN=YOUR_TOKEN`} />
           </div>
         </StepBlock>
         <StepBlock
