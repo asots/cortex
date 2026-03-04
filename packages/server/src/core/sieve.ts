@@ -121,13 +121,15 @@ export class MemorySieve {
 
     // 2. Deep channel (LLM structured extraction) — skip for small talk to save LLM calls
     let deepExtractionCount = 0;
+    let structuredExtractions: ExtractedMemory[] = [];
     if (!userIsSmallTalk) {
       const deepResult = await this.runDeepChannel(exchange, agentId, req.session_id);
       extracted.push(...deepResult.extracted);
       deduplicated += deepResult.deduplicated;
       smartUpdated += deepResult.smart_updated;
       extractionLogs.push(deepResult.extractionLog);
-      deepExtractionCount = deepResult.structuredExtractions.length;
+      structuredExtractions = deepResult.structuredExtractions;
+      deepExtractionCount = structuredExtractions.length;
     }
 
     log.info({
@@ -150,7 +152,7 @@ export class MemorySieve {
     return {
       extracted,
       high_signals: highSignals,
-      structured_extractions: [],
+      structured_extractions: structuredExtractions,
       deduplicated,
       smart_updated: smartUpdated,
       extraction_logs: extractionLogs,

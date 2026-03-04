@@ -8,8 +8,11 @@
  * (may not fire for kind:"tool" plugins in current OpenClaw versions).
  */
 
+// ── Plugin version ──────────────────────────────────────
+const PLUGIN_VERSION = '0.5.0';
+
 // ── Timeouts ────────────────────────────────────────────
-const RECALL_TIMEOUT = 3000;
+const RECALL_TIMEOUT = 8000;
 const INGEST_TIMEOUT = 5000;
 const FLUSH_TIMEOUT = 5000;
 const HEALTH_TIMEOUT = 2000;
@@ -238,7 +241,7 @@ export default {
   register(api: PluginApi) {
     const config = api.pluginConfig ?? {};
     const cortexUrl = getCortexUrl(config);
-    const agentId = (config.agentId as string) || 'openclaw';
+    const agentId = (config.agentId as string) || process.env.CORTEX_AGENT_ID || 'openclaw';
     const debug = isDebug(config);
     const log = api.logger;
 
@@ -412,16 +415,173 @@ export default {
       { optional: true },
     );
 
-    // ── Command: /cortex-status ─────────────────────────
+    // ── Command: /cortex_status ────────────────────────
     api.registerCommand({
-      name: 'cortex-status',
+      name: 'cortex_status',
       description: 'Check Cortex memory server status',
       handler: async () => {
-        const status = await cortexHealthCheck(cortexUrl);
-        if (status.ok) {
-          return { text: `Cortex is online (${status.latency_ms}ms)` };
+        const health = await cortexHealthCheck(cortexUrl);
+        if (!health.ok) {
+          return { text: `❌ Cortex is offline: ${health.error || 'unknown error'}` };
         }
-        return { text: `Cortex is offline: ${status.error || 'unknown error'}` };
+
+        // Fetch additional stats
+        const lines: string[] = [];
+        lines.push(`✅ Cortex is online (${health.latency_ms}ms)`);
+
+        try {
+          // Health details (version, uptime)
+          const healthRes = await fetch(`${cortexUrl}/api/v1/health`, {
+            signal: AbortSignal.timeout(HEALTH_TIMEOUT),
+          });
+          if (healthRes.ok) {
+            const data = (await healthRes.json()) as any;
+            if (data.version) lines.push(`📦 Version: ${data.version}`);
+            if (data.uptime) {
+              const h = Math.floor(data.uptime / 3600);
+              const m = Math.floor((data.uptime % 3600) / 60);
+              lines.push(`⏱ Uptime: ${h}h ${m}m`);
+            }
+            if (data.latestRelease?.updateAvailable) {
+              lines.push(`🆕 Update available: ${data.latestRelease.version}`);
+            }
+          }
+        } catch { /* ignore */ }
+
+        try {
+          // Memory stats
+          const statsRes = await fetch(`${cortexUrl}/api/v1/stats?agent_id=${encodeURIComponent(agentId)}`, {
+            headers: getHeaders(config),
+            signal: AbortSignal.timeout(HEALTH_TIMEOUT),
+          });
+          if (statsRes.ok) {
+            const stats = (await statsRes.json()) as any;
+            lines.push(`🧠 Memories: ${stats.total_memories ?? '?'}`);
+            if (stats.layers) {
+              const layerParts = Object.entries(stats.layers).map(([k, v]) => `${k}: ${v}`);
+              lines.push(`📂 Layers: ${layerParts.join(', ')}`);
+            }
+            if (stats.total_relations) lines.push(`🔗 Relations: ${stats.total_relations}`);
+          }
+        } catch { /* ignore */ }
+
+        lines.push(`🤖 Agent: ${agentId}`);
+        lines.push(`🌐 URL: ${cortexUrl}`);
+        lines.push(`🔌 Plugin: v${PLUGIN_VERSION}`);
+
+        // Version compatibility check
+        try {
+          const healthRes2 = await fetch(`${cortexUrl}/api/v1/health`, {
+            signal: AbortSignal.timeout(HEALTH_TIMEOUT),
+          });
+          if (healthRes2.ok) {
+            const hd = (await healthRes2.json()) as any;
+            const serverMajor = parseInt((hd.version || '0').split('.')[1] || '0');
+            const pluginMajor = parseInt(PLUGIN_VERSION.split('.')[1] || '0');
+            if (Math.abs(serverMajor - pluginMajor) > 1) {
+              lines.push(`⚠️ 版本差异较大: server v${hd.version} vs plugin v${PLUGIN_VERSION}，建议更新`);
+            }
+          }
+        } catch { /* ignore */ }
+
+        return { text: lines.join('\n') };
+      },
+    });
+
+    // ── Command: /cortex_search ─────────────────────────
+    api.registerCommand({
+      name: 'cortex_search',
+      description: 'Search Cortex memories by keyword',
+      acceptsArgs: true,
+      handler: async (ctx: any) => {
+        const query = (ctx.args || ctx.text || '').trim();
+        if (!query) {
+          return { text: '用法: /cortex_search <关键词>' };
+        }
+        try {
+          const res = await fetch(`${cortexUrl}/api/v1/recall`, {
+            method: 'POST',
+            headers: getHeaders(config),
+            body: JSON.stringify({ query, agent_id: agentId }),
+            signal: AbortSignal.timeout(15000),
+          });
+          if (!res.ok) return { text: `❌ 搜索失败 (HTTP ${res.status})` };
+          const data = (await res.json()) as any;
+          if (data.context && data.meta?.injected_count > 0) {
+            return { text: `🔍 找到 ${data.meta.injected_count} 条相关记忆 (${data.meta.latency_ms}ms):\n\n${data.context}` };
+          }
+          return { text: '🔍 没有找到相关记忆。' };
+        } catch (e) {
+          return { text: `❌ 搜索失败: ${(e as Error).message}` };
+        }
+      },
+    });
+
+    // ── Command: /cortex_remember ───────────────────────
+    api.registerCommand({
+      name: 'cortex_remember',
+      description: 'Store a memory in Cortex',
+      acceptsArgs: true,
+      handler: async (ctx: any) => {
+        const content = (ctx.args || ctx.text || '').trim();
+        if (!content) {
+          return { text: '用法: /cortex_remember <要记住的内容>' };
+        }
+        try {
+          const res = await fetch(`${cortexUrl}/api/v1/memories`, {
+            method: 'POST',
+            headers: getHeaders(config),
+            body: JSON.stringify({
+              content,
+              category: 'fact',
+              agent_id: agentId,
+              layer: 'core',
+              importance: 0.7,
+              confidence: 0.9,
+            }),
+            signal: AbortSignal.timeout(INGEST_TIMEOUT),
+          });
+          if (res.ok) {
+            return { text: `✅ 已记住: "${content}"` };
+          }
+          return { text: `❌ 存储失败 (HTTP ${res.status})` };
+        } catch (e) {
+          return { text: `❌ 存储失败: ${(e as Error).message}` };
+        }
+      },
+    });
+
+    // ── Command: /cortex_recent ─────────────────────────
+    api.registerCommand({
+      name: 'cortex_recent',
+      description: 'Show recent Cortex memories',
+      handler: async () => {
+        try {
+          const headers: Record<string, string> = {};
+          const token = getAuthToken(config);
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+          const res = await fetch(
+            `${cortexUrl}/api/v1/memories?agent_id=${encodeURIComponent(agentId)}&limit=10&sort=created_at&order=desc`,
+            { headers, signal: AbortSignal.timeout(10000) },
+          );
+          if (!res.ok) {
+            return { text: `❌ 获取失败 (HTTP ${res.status})` };
+          }
+          const data = (await res.json()) as any;
+          const items = data.items || data;
+          if (!Array.isArray(items) || items.length === 0) {
+            return { text: '📭 暂无记忆。' };
+          }
+          const lines = items.map((m: any, i: number) => {
+            const time = m.created_at ? new Date(m.created_at).toLocaleString('zh-CN', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?';
+            const cat = m.category || '?';
+            const text = (m.content || '').slice(0, 80);
+            return `${i + 1}. [${cat}] ${text}${m.content?.length > 80 ? '...' : ''}\n   🕐 ${time}`;
+          });
+          return { text: `🕐 最近 ${items.length} 条记忆:\n\n${lines.join('\n\n')}` };
+        } catch (e) {
+          return { text: `❌ 获取失败: ${(e as Error).message}` };
+        }
       },
     });
 
@@ -439,7 +599,15 @@ export default {
         const query = cleanForIngestion(rawQuery).slice(0, 500);
         if (!query || query.length < 5) return;
 
-        const result = await cortexRecall(cortexUrl, query, agentId, config);
+        // Try recall with one retry on timeout
+        let result = await cortexRecall(cortexUrl, query, agentId, config).catch(() => null);
+        if (!result) {
+          // Retry once after a short delay
+          await new Promise(r => setTimeout(r, 500));
+          result = await cortexRecall(cortexUrl, query, agentId, config).catch(() => null);
+          if (result && debug) log.info(`[cortex-bridge] Hook recall succeeded on retry`);
+        }
+
         if (result) {
           log.info(`[cortex-bridge] Hook recalled ${result.count} memories`);
           return { prependContext: result.context };
@@ -492,7 +660,13 @@ export default {
           return;
         }
 
-        const result = await cortexIngest(cortexUrl, userText, assistantText, agentId, cleanedMessages, config);
+        let result = await cortexIngest(cortexUrl, userText, assistantText, agentId, cleanedMessages, config);
+        if (!result.ok) {
+          // Retry once
+          await new Promise(r => setTimeout(r, 1000));
+          result = await cortexIngest(cortexUrl, userText, assistantText, agentId, cleanedMessages, config);
+          if (result.ok && debug) log.info(`[cortex-bridge] agent_end ingest succeeded on retry`);
+        }
         if (debug) log.info(`[cortex-bridge] agent_end ingest ok=${result.ok}, messages=${cleanedMessages.length}`);
       } catch (e) {
         if (debug) log.warn(`[cortex-bridge] agent_end error: ${(e as Error).message}`);

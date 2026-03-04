@@ -252,7 +252,7 @@ export default {
     openclawJsonMethod: '方式 A：OpenClaw 配置文件（推荐）',
     openclawJsonMethodDesc: '在 openclaw.json 中添加 cortex-bridge 插件配置。推荐使用此方式 — 包含 authToken 和 agentId，确保安全隔离访问。',
     openclawEnvMethod: '方式 B：环境变量',
-    openclawEnvMethodDesc: '也可以通过环境变量配置。注意：如果未在插件配置中设置 agentId，默认为 "openclaw"。',
+    openclawEnvMethodDesc: '也可以通过环境变量配置。CORTEX_AGENT_ID 必须与当前智能体的 ID 一致，用于严格的访问隔离。',
     openclawShellMethod: '方式 C：添加到 shell 配置文件',
     openclawShellMethodDesc: '如果你不使用 .env 文件，把 export 命令添加到 shell 配置中。运行下面的命令，然后重启终端或执行 source ~/.zshrc 使其生效。',
     openclawStep3Title: '完成 — 自动生效',
@@ -262,9 +262,12 @@ export default {
     openclawHookCompaction: 'before_compaction 钩子 — 上下文压缩前紧急保存关键信息',
     openclawToolRecall: 'cortex_recall 工具 — 让智能体按需搜索记忆',
     openclawToolRemember: 'cortex_remember 工具 — 让智能体存储重要事实',
-    openclawCommand: '/cortex-status 命令 — 快速检查 Cortex 服务器状态',
+    openclawCommand: '/cortex_status 命令 — 快速检查 Cortex 服务器状态',
+    openclawCommandSearch: '/cortex_search 命令 — 按关键词搜索记忆',
+    openclawCommandRemember: '/cortex_remember 命令 — 快速存储一条记忆',
+    openclawCommandRecent: '/cortex_recent 命令 — 查看最近的记忆',
     openclawStep4Title: '测试一下',
-    openclawStep4Desc: '和你的 OpenClaw 智能体聊天，告诉它一些值得记住的信息（比如"我最喜欢的颜色是蓝色"）。然后开一个新对话，问"我最喜欢什么颜色？" 如果回答正确，说明 Cortex 已经在工作了！你也可以输入 /cortex-status 检查连接状态。',
+    openclawStep4Desc: '和你的 OpenClaw 智能体聊天，告诉它一些值得记住的信息（比如"我最喜欢的颜色是蓝色"）。然后开一个新对话，问"我最喜欢什么颜色？" 如果回答正确，说明 Cortex 已经在工作了！你也可以输入 /cortex_status 检查连接状态。',
 
     // 通用
     stepLabel: '步骤 {{step}}',

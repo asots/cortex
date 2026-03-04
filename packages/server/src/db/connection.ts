@@ -72,7 +72,7 @@ function runMigrations(db: Database.Database): void {
   if (dbPath && dbPath !== ':memory:') {
     const backupPath = `${dbPath}.backup-${Date.now()}`;
     try {
-      db.backup(backupPath);
+      db.backup(backupPath).catch((e: any) => log.warn({ error: e.message }, 'Async backup failed'));
       log.info({ backupPath }, `Pre-migration backup created (${pending.length} migrations pending)`);
 
       // Cleanup old backups, keep latest 3
@@ -484,8 +484,8 @@ export function backupDb(): string | null {
   const backupPath = `${dbPath}.daily-${new Date().toISOString().slice(0, 10)}`;
 
   try {
-    db.backup(backupPath);
-    log.info({ backupPath }, 'Daily backup created');
+    db.backup(backupPath).catch((e: any) => log.warn({ error: e.message }, 'Daily backup async error'));
+    log.info({ backupPath }, 'Daily backup started');
 
     // Keep latest 7 daily backups
     const backups = fs.readdirSync(dir)

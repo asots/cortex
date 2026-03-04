@@ -740,7 +740,13 @@ def ingest(user_msg: str, assistant_msg: str):
           <div style={{ padding: 14, background: 'var(--bg)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('agentDetail.openclawEnvMethod')}</div>
             <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 8px 0' }}>{t('agentDetail.openclawEnvMethodDesc')}</p>
-            <CodeSnippet title=".env" code={`CORTEX_URL=${cortexUrl}\nCORTEX_AUTH_TOKEN=YOUR_TOKEN`} />
+            <CodeSnippet title=".env" code={`CORTEX_URL=${cortexUrl}\nCORTEX_AUTH_TOKEN=YOUR_TOKEN\nCORTEX_AGENT_ID=${agentId}`} />
+          </div>
+          {/* Method C: shell profile */}
+          <div style={{ marginTop: 16, padding: 14, background: 'var(--bg)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('agentDetail.openclawShellMethod')}</div>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 8px 0' }}>{t('agentDetail.openclawShellMethodDesc')}</p>
+            <CodeSnippet title="~/.zshrc / ~/.bashrc" code={`echo 'export CORTEX_URL=${cortexUrl}' >> ~/.zshrc\necho 'export CORTEX_AUTH_TOKEN=YOUR_TOKEN' >> ~/.zshrc\necho 'export CORTEX_AGENT_ID=${agentId}' >> ~/.zshrc`} />
           </div>
         </StepBlock>
         <StepBlock
@@ -755,6 +761,9 @@ def ingest(user_msg: str, assistant_msg: str):
             <li>{t('agentDetail.openclawToolRecall')}</li>
             <li>{t('agentDetail.openclawToolRemember')}</li>
             <li>{t('agentDetail.openclawCommand')}</li>
+            <li>{t('agentDetail.openclawCommandSearch')}</li>
+            <li>{t('agentDetail.openclawCommandRemember')}</li>
+            <li>{t('agentDetail.openclawCommandRecent')}</li>
           </ul>
         </StepBlock>
         <StepBlock
