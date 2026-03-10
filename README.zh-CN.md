@@ -3,7 +3,8 @@
 </p>
 
 <h1 align="center">Cortex</h1>
-<p align="center"><strong>给你的 AI 一个真正的记忆</strong></p>
+<p align="center"><strong>你的 AI 会遗忘，Cortex 不会。</strong></p>
+<p align="center"><sub>会生长、会学习、会回忆的记忆系统。</sub></p>
 
 <p align="center">
   <a href="https://github.com/rikouu/cortex/releases"><img src="https://img.shields.io/github/v/release/rikouu/cortex?style=flat-square&color=6366f1" alt="Release" /></a>

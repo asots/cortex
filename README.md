@@ -4,6 +4,7 @@
 
 <h1 align="center">Cortex</h1>
 <p align="center"><strong>Your AI forgets. Cortex doesn't.</strong></p>
+<p align="center"><sub>Memory that lives, learns, and recalls.</sub></p>
 
 <p align="center">
   <a href="https://github.com/rikouu/cortex/releases"><img src="https://img.shields.io/github/v/release/rikouu/cortex?style=flat-square&color=6366f1" alt="Release" /></a>
