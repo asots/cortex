@@ -1,6 +1,8 @@
 import { createLogger } from '../utils/logger.js';
 import { metrics } from '../utils/metrics.js';
-import { upsertRelation, type Memory, type MemoryCategory } from '../db/index.js';
+import { upsertRelation as sqliteUpsertRelation, type Memory, type MemoryCategory } from '../db/index.js';
+import { getDriver, upsertRelation as neo4jUpsertRelation } from '../db/neo4j.js';
+import { randomUUID } from 'crypto';
 import { detectHighSignals, isSmallTalk, type DetectedSignal } from '../signals/index.js';
 import type { LLMProvider } from '../llm/interface.js';
 import type { EmbeddingProvider } from '../embedding/interface.js';
@@ -278,19 +280,36 @@ export class MemorySieve {
     // Write extracted relations
     if (this.config.sieve.relationExtraction && extractedRelations.length > 0) {
       const firstMemoryId = extracted.length > 0 ? extracted[0]!.id : null;
+      const useNeo4j = !!getDriver();
       for (const rel of extractedRelations) {
         try {
-          const result = upsertRelation({
-            subject: rel.subject,
-            predicate: rel.predicate,
-            object: rel.object,
-            confidence: rel.confidence,
-            source_memory_id: firstMemoryId,
-            agent_id: agentId,
-            source: 'extraction',
-            expired: rel.expired ? 1 : 0,
-          });
-          log.info({ action: result.action, subject: rel.subject, predicate: rel.predicate, object: rel.object }, 'Relation upserted');
+          if (useNeo4j) {
+            await neo4jUpsertRelation({
+              id: randomUUID(),
+              subject: rel.subject,
+              predicate: rel.predicate,
+              object: rel.object,
+              confidence: rel.confidence,
+              source_memory_id: firstMemoryId || undefined,
+              agent_id: agentId,
+              source: 'extraction',
+              extraction_count: 1,
+              expired: rel.expired ? 1 : 0,
+            });
+            log.info({ target: 'neo4j', subject: rel.subject, predicate: rel.predicate, object: rel.object }, 'Relation upserted');
+          } else {
+            const result = sqliteUpsertRelation({
+              subject: rel.subject,
+              predicate: rel.predicate,
+              object: rel.object,
+              confidence: rel.confidence,
+              source_memory_id: firstMemoryId,
+              agent_id: agentId,
+              source: 'extraction',
+              expired: rel.expired ? 1 : 0,
+            });
+            log.info({ target: 'sqlite', action: result.action, subject: rel.subject, predicate: rel.predicate, object: rel.object }, 'Relation upserted');
+          }
         } catch (e: any) {
           log.warn({ error: e.message, subject: rel.subject, predicate: rel.predicate }, 'Failed to upsert relation');
         }

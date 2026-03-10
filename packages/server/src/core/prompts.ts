@@ -64,13 +64,37 @@ const SHARED_OUTPUT_FORMAT = `## Output format
 If nothing qualifies: {"memories": [], "nothing_extracted": true}`;
 
 const SHARED_RELATION_RULES = `## Relations
+### Core rules
 - ONLY extract relationships that are EXPLICITLY stated. Do NOT infer or speculate.
-- subject/object MUST be short entity names (1-5 words), NOT descriptions or sentences
+- subject/object MUST be short CANONICAL entity names (1-4 words), NOT descriptions or sentences
 - Only extract when BOTH entities are explicitly mentioned
 - Use the same language as the conversation for entity names
 - If the relationship is PAST TENSE (used to, previously, no longer), set "expired": true
 - For negative relationships, use negative predicates: not_uses, not_interested_in, dislikes
-- Standard predicates: uses, works_at, lives_in, knows, manages, belongs_to, created, prefers, studies, skilled_in, collaborates_with, reports_to, owns, interested_in, related_to, not_uses, not_interested_in, dislikes`;
+
+### Entity normalization (CRITICAL)
+- Use the SIMPLEST canonical name for entities: "Cortex" not "Cortex 系统/项目/记忆系统"
+- Person names: use their name or title, e.g. "天哥" not "用户"
+- Tools/services: use the tool name, e.g. "Neo4j" not "Neo4j 5 图数据库"
+- Merge similar entities: "Docker" covers "docker compose", "docker 容器管理" etc.
+
+### What NOT to extract as relations
+- Version-specific facts: "v0.6.4 → dashboard" is NOT a lasting relation
+- Debugging/session operations: "ssh 连接", "容器重建", "CI 构建" are ephemeral
+- Implementation details: "N+1 查询修复 → 性能问题" is a task, not a relation
+- Common knowledge: "Python → programming language" adds no value
+
+### What TO extract
+- Ownership/usage: "用户 --owns--> Cortex", "Cortex --uses--> SQLite"
+- Identity: "天哥 --works_at--> 大阪", "小美 --belongs_to--> 天哥"
+- Preferences: "天哥 --prefers--> 冰美式"
+- Stable architecture: "Cortex --uses--> Haiku" (model choice)
+
+### Standard predicates
+uses, works_at, lives_in, knows, manages, belongs_to, created, prefers, studies, skilled_in, collaborates_with, reports_to, owns, interested_in, related_to, not_uses, not_interested_in, dislikes
+
+### Avoid "related_to"
+"related_to" is the weakest predicate. Only use it when NO other predicate fits. Prefer specific predicates.`;
 
 // ── Sieve: single-exchange structured extraction ─────────────────
 
@@ -107,7 +131,7 @@ ${SHARED_EXCLUSIONS}
 
 ## Examples
 
-### Example 1: Rich information — extract multiple
+### Example 1: Rich information — extract multiple memories AND relations
 [USER]: 我在大阪开了一家拉面店，用 Go 写点单系统，最近在考虑加个外卖功能
 [ASSISTANT]: 大阪拉面！外卖功能确实是趋势
 
@@ -115,7 +139,11 @@ ${SHARED_EXCLUSIONS}
   {"content": "在大阪经营拉面店", "category": "identity", "importance": 0.95, "source": "user_stated", "reasoning": "core identity"},
   {"content": "使用 Go 开发点单系统", "category": "skill", "importance": 0.8, "source": "user_stated", "reasoning": "technical skill + use case"},
   {"content": "考虑为拉面店添加外卖功能", "category": "goal", "importance": 0.7, "source": "user_stated", "reasoning": "active plan"}
-], "relations": [{"subject": "用户", "predicate": "lives_in", "object": "大阪", "confidence": 0.95, "expired": false}], "nothing_extracted": false}
+], "relations": [
+  {"subject": "用户", "predicate": "lives_in", "object": "大阪", "confidence": 0.95, "expired": false},
+  {"subject": "用户", "predicate": "owns", "object": "拉面店", "confidence": 0.95, "expired": false},
+  {"subject": "用户", "predicate": "uses", "object": "Go", "confidence": 0.9, "expired": false}
+], "nothing_extracted": false}
 
 ### Example 2: Pure debugging — nothing to extract
 [USER]: 这个 CORS 报错怎么解决？Error: Access to XMLHttpRequest blocked
@@ -141,7 +169,19 @@ ${SHARED_EXCLUSIONS}
 
 {"memories": [{"content": "决定将反向代理从 Nginx 全部切换为 Caddy", "category": "decision", "importance": 0.85, "source": "user_stated", "reasoning": "lasting infrastructure decision born from debugging"}], "nothing_extracted": false}
 
-### Example 6: Agent self-improvement — extract from ASSISTANT perspective
+### Example 6: Relation quality — normalize entities, avoid noise
+[USER]: Cortex 记忆系统现在用 SQLite 存数据，考虑以后换 Neo4j。v0.6.7 的 Dashboard 图谱用了 sigma.js
+[ASSISTANT]: Neo4j 适合图数据，sigma.js 渲染很丝滑
+
+{"memories": [
+  {"content": "考虑将 Cortex 的关系存储从 SQLite 迁移到 Neo4j", "category": "goal", "importance": 0.8, "source": "user_stated", "reasoning": "architecture migration plan"}
+], "relations": [
+  {"subject": "Cortex", "predicate": "uses", "object": "SQLite", "confidence": 0.95, "expired": false},
+  {"subject": "Cortex", "predicate": "interested_in", "object": "Neo4j", "confidence": 0.7, "expired": false}
+], "nothing_extracted": false}
+NOTE: "v0.6.7" and "Dashboard 图谱" are version-specific details — NOT extracted as relations. "sigma.js" is an implementation detail of one page — too granular for a relation.
+
+### Example 7: Agent self-improvement — extract from ASSISTANT perspective
 [USER]: 你上次给的代码有bug，少了错误处理
 [ASSISTANT]: 抱歉！记住了，以后生成代码都要加完整的 error handling
 

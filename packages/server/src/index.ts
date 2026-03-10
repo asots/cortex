@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, createLogger } from './utils/index.js';
 import { initDatabase, closeDatabase } from './db/index.js';
+import { initNeo4j, ensureSchema as ensureNeo4jSchema, closeNeo4j } from './db/neo4j.js';
 import { CortexApp } from './app.js';
 import { registerAllRoutes } from './api/router.js';
 import { registerAuthRoutes, registerAuthMiddleware, registerAgentEnforcement, registerRateLimiting, registerInputLimits } from './api/security.js';
@@ -19,8 +20,14 @@ async function main() {
   const config = loadConfig();
   log.info({ port: config.port, host: config.host }, 'Starting Cortex server');
 
-  // 2. Initialize database
+  // 2. Initialize databases
   initDatabase(config.storage.dbPath);
+
+  // 2b. Initialize Neo4j (optional — graph features)
+  const neo4jDriver = initNeo4j();
+  if (neo4jDriver) {
+    await ensureNeo4jSchema();
+  }
 
   // 3. Create app
   const cortex = new CortexApp(config);
@@ -107,6 +114,7 @@ async function main() {
     await app.close();
     await cortex.shutdown();
     closeDatabase();
+    await closeNeo4j();
     process.exit(0);
   };
 

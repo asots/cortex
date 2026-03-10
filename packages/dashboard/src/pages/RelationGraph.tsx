@@ -5,6 +5,7 @@ import { toLocal } from '../utils/time.js';
 import Graph from 'graphology';
 import Sigma from 'sigma';
 import forceAtlas2 from 'graphology-layout-forceatlas2';
+import FA2Layout from 'graphology-layout-forceatlas2/worker';
 
 interface Relation {
   id: string;
@@ -57,6 +58,7 @@ export default function RelationGraph() {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<Sigma | null>(null);
   const graphRef = useRef<Graph | null>(null);
+  const layoutRef = useRef<FA2Layout | null>(null);
   const { t } = useI18n();
 
   const load = () => {
@@ -183,16 +185,16 @@ export default function RelationGraph() {
       });
     }
 
-    // Run ForceAtlas2 layout (synchronous)
+    // Run ForceAtlas2 layout — quick sync warmup, then async worker for smooth animation
     if (graph.order > 0) {
       forceAtlas2.assign(graph, {
-        iterations: 100,
+        iterations: 50,
         settings: {
           gravity: 1,
-          scalingRatio: 10,
-          barnesHutOptimize: graph.order > 50,
-          strongGravityMode: true,
-          slowDown: 5,
+          scalingRatio: 8,
+          barnesHutOptimize: graph.order > 100,
+          strongGravityMode: false,
+          slowDown: 10,
         },
       });
     }
@@ -263,7 +265,26 @@ export default function RelationGraph() {
       setNodeMemories([]);
     });
 
+    // Start FA2 worker for smooth animated layout (runs for 3s then stops)
+    if (graph.order > 0) {
+      if (layoutRef.current) { layoutRef.current.stop(); layoutRef.current.kill(); }
+      const layout = new FA2Layout(graph, {
+        settings: {
+          gravity: 1,
+          scalingRatio: 8,
+          barnesHutOptimize: graph.order > 100,
+          strongGravityMode: false,
+          slowDown: 10,
+        },
+      });
+      layout.start();
+      layoutRef.current = layout;
+      // Auto-stop after 4 seconds to save CPU
+      setTimeout(() => { layout.stop(); }, 4000);
+    }
+
     return () => {
+      if (layoutRef.current) { layoutRef.current.stop(); layoutRef.current.kill(); layoutRef.current = null; }
       renderer.kill();
       rendererRef.current = null;
       graphRef.current = null;

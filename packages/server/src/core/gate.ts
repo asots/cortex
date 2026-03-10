@@ -8,6 +8,7 @@ import type { CortexConfig } from '../utils/config.js';
 import type { LLMProvider } from '../llm/interface.js';
 import { findRelatedRelations } from '../db/queries.js';
 import { extractEntityTokens } from '../utils/helpers.js';
+import { getDriver, traverseRelations, listRelations as neo4jListRelations } from '../db/neo4j.js';
 
 const log = createLogger('gate');
 
@@ -130,7 +131,7 @@ export class MemoryGate {
     let context = this.searchEngine.formatForInjection(results, memoryTokens);
     const injectedCount = context ? context.split('\n').length - 2 : 0; // minus tags
 
-    // Inject relevant relations
+    // Inject relevant relations (Neo4j multi-hop or SQLite fallback)
     let relationsCount = 0;
     if (relationInjection) {
       // Extract entity tokens from query + top 5 memory contents
@@ -140,13 +141,75 @@ export class MemoryGate {
       }
       const uniqueEntities = [...new Set(entityTokens)].slice(0, 20);
 
-      const relations = findRelatedRelations(uniqueEntities, req.agent_id);
-      if (relations.length > 0) {
-        relationsCount = relations.length;
-        const lines = relations.map(r => `${r.subject} --${r.predicate}--> ${r.object} (${r.confidence.toFixed(2)})`);
-        const relBlock = `<cortex_relations>\n${lines.join('\n')}\n</cortex_relations>`;
-        context = context ? `${context}\n${relBlock}` : relBlock;
-        log.debug({ count: relations.length }, 'Relations injected');
+      const useNeo4j = !!getDriver();
+
+      if (useNeo4j) {
+        // Neo4j multi-hop: traverse from each entity to find related ones
+        const allRelated = new Set<string>();
+        const relationLines: string[] = [];
+
+        // Traverse top 5 entities for efficiency
+        for (const entity of uniqueEntities.slice(0, 5)) {
+          try {
+            const traversed = await traverseRelations(entity, {
+              maxHops: 2,
+              minConfidence: 0.6,
+              limit: 10,
+              agentId: req.agent_id,
+            });
+            for (const t of traversed) {
+              allRelated.add(t.entity);
+              if (t.hops <= 2) {
+                relationLines.push(`${entity} → ${t.path.slice(1).join(' → ')} (${t.hops}hop)`);
+              }
+            }
+          } catch (e: any) {
+            log.debug({ entity, error: e.message }, 'Traverse failed for entity');
+          }
+        }
+
+        // Also get direct relations for context
+        try {
+          const directRels = await neo4jListRelations({
+            agentId: req.agent_id,
+            limit: 15,
+            includeExpired: false,
+          });
+
+          // Filter to relations involving our entities
+          const relevantRels = directRels.filter(r =>
+            uniqueEntities.some(e =>
+              r.subject.toLowerCase().includes(e.toLowerCase()) ||
+              r.object.toLowerCase().includes(e.toLowerCase())
+            )
+          ).slice(0, 10);
+
+          for (const r of relevantRels) {
+            const line = `${r.subject} --${r.predicate}--> ${r.object} (${r.confidence.toFixed(2)})`;
+            if (!relationLines.includes(line)) {
+              relationLines.push(line);
+            }
+          }
+        } catch (e: any) {
+          log.debug({ error: e.message }, 'Failed to fetch direct relations');
+        }
+
+        if (relationLines.length > 0) {
+          relationsCount = relationLines.length;
+          const relBlock = `<cortex_relations>\n${relationLines.join('\n')}\n</cortex_relations>`;
+          context = context ? `${context}\n${relBlock}` : relBlock;
+          log.debug({ count: relationLines.length, source: 'neo4j' }, 'Relations injected');
+        }
+      } else {
+        // SQLite fallback
+        const relations = findRelatedRelations(uniqueEntities, req.agent_id);
+        if (relations.length > 0) {
+          relationsCount = relations.length;
+          const lines = relations.map(r => `${r.subject} --${r.predicate}--> ${r.object} (${r.confidence.toFixed(2)})`);
+          const relBlock = `<cortex_relations>\n${lines.join('\n')}\n</cortex_relations>`;
+          context = context ? `${context}\n${relBlock}` : relBlock;
+          log.debug({ count: relations.length, source: 'sqlite' }, 'Relations injected');
+        }
       }
     }
 

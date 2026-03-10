@@ -19,9 +19,38 @@ services:
       - CORTEX_DB_PATH=cortex/brain.db
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - CORTEX_AUTH_TOKEN=${CORTEX_AUTH_TOKEN:-}
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=cortex-graph-2026
       - LOG_LEVEL=info
       - TZ=Asia/Tokyo
+    restart: unless-stopped
+    depends_on:
+      neo4j:
+        condition: service_healthy
+
+  neo4j:
+    image: neo4j:5-community
+    ports:
+      - "7474:7474"   # Browser UI
+      - "7687:7687"   # Bolt protocol
+    volumes:
+      - neo4j-data:/data
+    environment:
+      - NEO4J_AUTH=neo4j/cortex-graph-2026
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_server_memory_heap_initial__size=256m
+      - NEO4J_server_memory_heap_max__size=512m
+      - NEO4J_server_memory_pagecache_size=128m
+      - TZ=Asia/Tokyo
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
 
 volumes:
   cortex-data:
+  neo4j-data:
