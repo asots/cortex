@@ -8,21 +8,32 @@
  *   "mcpServers": {
  *     "cortex": {
  *       "command": "npx",
- *       "args": ["cortex-mcp", "--server-url", "http://localhost:21100"]
+ *       "args": ["@cortexmem/mcp", "--server-url", "http://localhost:21100"],
+ *       "env": { "CORTEX_AGENT_ID": "your-agent-id" }
  *     }
  *   }
  * }
+ *
+ * CLI flags: --server-url <url>  --agent-id <id>
+ * Env vars:  CORTEX_URL          CORTEX_AGENT_ID
  */
 
 const CORTEX_URL = process.argv.includes('--server-url')
   ? process.argv[process.argv.indexOf('--server-url') + 1] || 'http://localhost:21100'
   : process.env.CORTEX_URL || 'http://localhost:21100';
 
+const CORTEX_AGENT_ID = process.argv.includes('--agent-id')
+  ? process.argv[process.argv.indexOf('--agent-id') + 1]
+  : process.env.CORTEX_AGENT_ID || '';
+
 async function forwardToServer(msg: any): Promise<any> {
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (CORTEX_AGENT_ID) headers['x-agent-id'] = CORTEX_AGENT_ID;
+
     const res = await fetch(`${CORTEX_URL}/mcp/message`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(msg),
       signal: AbortSignal.timeout(30000),
     });

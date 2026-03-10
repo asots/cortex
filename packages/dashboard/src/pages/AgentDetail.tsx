@@ -594,7 +594,7 @@ def ingest(user_msg: str, assistant_msg: str):
           mcpServers: {
             cortex: {
               command: 'npx',
-              args: ['cortex-mcp', '--server-url', cortexUrl],
+              args: ['@cortexmem/mcp', '--server-url', cortexUrl],
               env: { CORTEX_AGENT_ID: agentId },
             },
           },
@@ -606,7 +606,7 @@ def ingest(user_msg: str, assistant_msg: str):
           mcpServers: {
             cortex: {
               command: 'npx',
-              args: ['cortex-mcp'],
+              args: ['@cortexmem/mcp'],
               env: { CORTEX_URL: cortexUrl, CORTEX_AGENT_ID: agentId },
             },
           },
@@ -614,7 +614,7 @@ def ingest(user_msg: str, assistant_msg: str):
         pasteDesc: t('agentDetail.mcpStep2CursorDesc'),
       },
       'claude-code': {
-        code: `claude mcp add cortex -- npx cortex-mcp --server-url ${cortexUrl}`,
+        code: `claude mcp add cortex -- npx @cortexmem/mcp --server-url ${cortexUrl}\n# Set agent ID:\nclaude mcp add cortex -e CORTEX_AGENT_ID=${agentId} -- npx @cortexmem/mcp --server-url ${cortexUrl}`,
         pasteDesc: t('agentDetail.mcpStep2ClaudeCodeDesc'),
       },
       'other': {
@@ -622,7 +622,7 @@ def ingest(user_msg: str, assistant_msg: str):
           mcpServers: {
             cortex: {
               command: 'npx',
-              args: ['cortex-mcp', '--server-url', cortexUrl],
+              args: ['@cortexmem/mcp', '--server-url', cortexUrl],
               env: { CORTEX_AGENT_ID: agentId },
             },
           },
