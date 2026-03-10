@@ -21,25 +21,17 @@ interface Relation {
   updated_at: string;
 }
 
-// Agent color palette
 const AGENT_COLORS = [
   '#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#3b82f6',
   '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#06b6d4',
-  '#84cc16', '#e11d48', '#0ea5e9', '#a855f7', '#10b981',
 ];
 
 function getAgentColor(agentId: string, agentMap: Map<string, number>): string {
-  if (!agentMap.has(agentId)) {
-    agentMap.set(agentId, agentMap.size);
-  }
+  if (!agentMap.has(agentId)) agentMap.set(agentId, agentMap.size);
   return AGENT_COLORS[agentMap.get(agentId)! % AGENT_COLORS.length]!;
 }
 
-function nodeSize(extractionCount: number): number {
-  // 1 → 5, 10+ → 20, linear in between
-  const clamped = Math.min(Math.max(extractionCount || 1, 1), 10);
-  return 5 + ((clamped - 1) / 9) * 15;
-}
+type ViewMode = 'explore' | 'full';
 
 export default function RelationGraph() {
   const [relations, setRelations] = useState<Relation[]>([]);
@@ -49,46 +41,103 @@ export default function RelationGraph() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [nodeMemories, setNodeMemories] = useState<any[]>([]);
   const [loadingMemories, setLoadingMemories] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const [tablePage, setTablePage] = useState(0);
+  const [autoRefresh, setAutoRefresh] = useState(false);
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.6);
+  const [viewMode, setViewMode] = useState<ViewMode>('explore');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [focusEntity, setFocusEntity] = useState<string | null>(null);
+  const [expandDepth, setExpandDepth] = useState(1);
+  const [tablePage, setTablePage] = useState(0);
   const tableLimit = 20;
-  const [tooMany, setTooMany] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<Sigma | null>(null);
   const graphRef = useRef<Graph | null>(null);
   const layoutRef = useRef<FA2Layout | null>(null);
+  const agentColorMap = useRef(new Map<string, number>());
   const { t } = useI18n();
 
   const load = () => {
     listRelations({ limit: '500', include_expired: '1' }).then((data: Relation[]) => {
       setRelations(data);
-      setTooMany(data.length >= 500);
     });
   };
 
   useEffect(() => { load(); }, []);
-
-  // Auto-refresh every 30s
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(load, 30000);
     return () => clearInterval(interval);
   }, [autoRefresh]);
 
-  // Derive unique predicates
+  // Derive data
   const predicates = [...new Set(relations.map(r => r.predicate))];
 
-  // Filter relations by predicate AND confidence threshold
   const filteredRelations = useMemo(() => {
     let result = relations.filter(r => (r.confidence ?? 1) >= confidenceThreshold);
-    if (predicateFilter) {
-      result = result.filter(r => r.predicate === predicateFilter);
-    }
+    if (predicateFilter) result = result.filter(r => r.predicate === predicateFilter);
     return result;
   }, [relations, predicateFilter, confidenceThreshold]);
 
+  // Build node degree map
+  const nodeDegree = useMemo(() => {
+    const deg = new Map<string, number>();
+    for (const r of filteredRelations) {
+      deg.set(r.subject, (deg.get(r.subject) || 0) + 1);
+      deg.set(r.object, (deg.get(r.object) || 0) + 1);
+    }
+    return deg;
+  }, [filteredRelations]);
+
+  // Entity suggestions for search
+  const entitySuggestions = useMemo(() => {
+    if (!searchQuery || searchQuery.length < 1) return [];
+    const q = searchQuery.toLowerCase();
+    return [...nodeDegree.entries()]
+      .filter(([name]) => name.toLowerCase().includes(q))
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([name, deg]) => ({ name, degree: deg }));
+  }, [searchQuery, nodeDegree]);
+
+  // Compute visible relations based on mode
+  const visibleRelations = useMemo(() => {
+    if (viewMode === 'full') return filteredRelations;
+    if (!focusEntity) return [];
+
+    // BFS expansion from focus entity
+    const visited = new Set<string>([focusEntity]);
+    const queue = [focusEntity];
+    for (let depth = 0; depth < expandDepth; depth++) {
+      const nextQueue: string[] = [];
+      for (const entity of queue) {
+        for (const r of filteredRelations) {
+          if (r.subject === entity && !visited.has(r.object)) {
+            visited.add(r.object);
+            nextQueue.push(r.object);
+          }
+          if (r.object === entity && !visited.has(r.subject)) {
+            visited.add(r.subject);
+            nextQueue.push(r.subject);
+          }
+        }
+      }
+      queue.length = 0;
+      queue.push(...nextQueue);
+    }
+
+    return filteredRelations.filter(r => visited.has(r.subject) && visited.has(r.object));
+  }, [viewMode, focusEntity, expandDepth, filteredRelations]);
+
+  // Focus on entity
+  const handleFocusEntity = (name: string) => {
+    setFocusEntity(name);
+    setSelectedNode(name);
+    setSearchQuery(name);
+    loadNodeMemories(name);
+  };
+
+  // Handlers
   const handleCreate = async () => {
     await createRelation(newRel);
     setNewRel({ subject: '', predicate: '', object: '', confidence: 0.8 });
@@ -102,64 +151,61 @@ export default function RelationGraph() {
     load();
   };
 
-  // Load memories for selected node
   const loadNodeMemories = async (entityName: string) => {
     setLoadingMemories(true);
     try {
       const res = await search({ query: entityName, limit: 10, debug: false });
       setNodeMemories(res.results || []);
-    } catch {
-      setNodeMemories([]);
-    }
+    } catch { setNodeMemories([]); }
     setLoadingMemories(false);
   };
 
-  // Source badge component
-  const sourceBadge = (source: string) => {
-    const isExtraction = source === 'extraction' || source === 'flush';
-    return (
-      <span style={{
-        fontSize: 10,
-        padding: '1px 6px',
-        borderRadius: 3,
-        background: isExtraction ? 'rgba(34,197,94,0.15)' : 'rgba(99,102,241,0.15)',
-        color: isExtraction ? '#22c55e' : '#818cf8',
-        fontWeight: 500,
-      }}>
-        {isExtraction ? t('relations.sourceExtraction') : t('relations.sourceManual')}
-      </span>
-    );
-  };
+  // ── Sigma.js rendering ──
 
-  // ── Sigma.js graph rendering ──
-
-  // Build agent color map from relations
-  const agentColorMap = useRef(new Map<string, number>());
-
-  // Build and render sigma graph when filteredRelations or selectedNode changes
   useEffect(() => {
     if (!containerRef.current) return;
+    if (visibleRelations.length === 0) {
+      // Clean up existing renderer
+      if (rendererRef.current) { rendererRef.current.kill(); rendererRef.current = null; }
+      if (layoutRef.current) { layoutRef.current.stop(); layoutRef.current.kill(); layoutRef.current = null; }
+      if (graphRef.current) { graphRef.current = null; }
+      return;
+    }
 
     const graph = new Graph({ multi: true, type: 'directed' });
     graphRef.current = graph;
 
-    // Collect node info: max extraction count per entity, and agent color
-    const nodeInfo = new Map<string, { maxExtraction: number; agentId: string }>();
-    for (const r of filteredRelations) {
+    // Compute degree within visible set
+    const visDegree = new Map<string, number>();
+    for (const r of visibleRelations) {
+      visDegree.set(r.subject, (visDegree.get(r.subject) || 0) + 1);
+      visDegree.set(r.object, (visDegree.get(r.object) || 0) + 1);
+    }
+    const maxDeg = Math.max(...visDegree.values(), 1);
+
+    // Node agent: most frequent agent in connected edges
+    const nodeAgent = new Map<string, Map<string, number>>();
+    for (const r of visibleRelations) {
       for (const entity of [r.subject, r.object]) {
-        const existing = nodeInfo.get(entity);
-        if (!existing) {
-          nodeInfo.set(entity, { maxExtraction: r.extraction_count || 1, agentId: r.agent_id || 'default' });
-        } else {
-          existing.maxExtraction = Math.max(existing.maxExtraction, r.extraction_count || 1);
-        }
+        if (!nodeAgent.has(entity)) nodeAgent.set(entity, new Map());
+        const m = nodeAgent.get(entity)!;
+        m.set(r.agent_id, (m.get(r.agent_id) || 0) + 1);
       }
     }
+    const getNodeAgent = (name: string): string => {
+      const m = nodeAgent.get(name);
+      if (!m) return 'default';
+      let best = 'default', bestCount = 0;
+      for (const [a, c] of m) { if (c > bestCount) { best = a; bestCount = c; } }
+      return best;
+    };
 
     // Add nodes
-    for (const [entity, info] of nodeInfo) {
-      const color = getAgentColor(info.agentId, agentColorMap.current);
-      const size = nodeSize(info.maxExtraction);
+    for (const [entity, deg] of visDegree) {
+      const isFocus = entity === focusEntity;
+      const size = isFocus ? 20 : 5 + (deg / maxDeg) * 15;
+      const color = isFocus ? '#f59e0b' : getAgentColor(getNodeAgent(entity), agentColorMap.current);
+
       graph.addNode(entity, {
         label: entity,
         size,
@@ -170,58 +216,54 @@ export default function RelationGraph() {
     }
 
     // Add edges
-    for (const r of filteredRelations) {
+    for (const r of visibleRelations) {
       const conf = r.confidence ?? 0.5;
-      const edgeSize = 1 + conf * 4; // 1..5
-      const alpha = Math.max(0.2, conf); // 0.2..1.0
-      // Color with alpha baked in
-      const edgeColor = `rgba(150, 150, 200, ${alpha})`;
       graph.addEdge(r.subject, r.object, {
         label: r.predicate,
-        size: edgeSize,
-        color: edgeColor,
+        size: 1 + conf * 2,
+        color: `rgba(120, 120, 180, ${Math.max(0.3, conf * 0.6)})`,
         type: 'arrow',
-        relationId: r.id,
       });
     }
 
-    // Run ForceAtlas2 layout — quick sync warmup, then async worker for smooth animation
+    // Layout
     if (graph.order > 0) {
+      const nodeCount = graph.order;
       forceAtlas2.assign(graph, {
-        iterations: 50,
+        iterations: 80,
         settings: {
-          gravity: 1,
-          scalingRatio: 8,
-          barnesHutOptimize: graph.order > 100,
-          strongGravityMode: false,
-          slowDown: 10,
+          gravity: nodeCount > 50 ? 2 : 1,
+          scalingRatio: nodeCount > 50 ? 15 : 10,
+          barnesHutOptimize: nodeCount > 50,
+          strongGravityMode: true,
+          slowDown: 5,
+          linLogMode: true,
         },
       });
     }
 
-    // Create sigma renderer
+    // Renderer
     const renderer = new Sigma(graph, containerRef.current, {
-      renderEdgeLabels: true,
+      renderEdgeLabels: viewMode === 'explore' && visibleRelations.length < 80,
       defaultEdgeType: 'arrow',
-      labelRenderedSizeThreshold: 6,
-      labelSize: 12,
+      labelRenderedSizeThreshold: viewMode === 'explore' ? 4 : 10,
+      labelSize: 13,
+      labelWeight: 'bold',
       labelColor: { color: '#e2e8f0' },
-      edgeLabelColor: { color: '#94a3b8' },
-      edgeLabelSize: 10,
-      // Node/edge reducers for search highlight
+      edgeLabelColor: { color: '#7c8194' },
+      edgeLabelSize: 9,
       nodeReducer: (node, data) => {
         const res = { ...data };
-        if (selectedNode) {
+        if (selectedNode && selectedNode !== focusEntity) {
           if (node === selectedNode) {
             res.highlighted = true;
             res.zIndex = 1;
           } else {
-            // Check if connected to selected
-            const connected = filteredRelations.some(
+            const connected = visibleRelations.some(
               r => (r.subject === selectedNode && r.object === node) ||
                    (r.object === selectedNode && r.subject === node)
             );
-            if (!connected) {
+            if (!connected && node !== focusEntity) {
               res.color = '#2a2e3a';
               res.label = '';
             }
@@ -231,14 +273,13 @@ export default function RelationGraph() {
       },
       edgeReducer: (edge, data) => {
         const res = { ...data };
-        if (selectedNode) {
+        if (selectedNode && selectedNode !== focusEntity) {
           const source = graph.source(edge);
           const target = graph.target(edge);
           if (source === selectedNode || target === selectedNode) {
-            res.color = 'rgba(99, 102, 241, 0.8)';
+            res.color = 'rgba(99, 102, 241, 0.9)';
             res.size = (data.size || 2) + 1;
           } else {
-            res.color = 'rgba(100, 100, 140, 0.1)';
             res.hidden = true;
           }
         }
@@ -247,40 +288,40 @@ export default function RelationGraph() {
     });
     rendererRef.current = renderer;
 
-    // Click handler
     renderer.on('clickNode', ({ node }) => {
       setSelectedNode(prev => {
-        if (prev === node) {
-          setNodeMemories([]);
-          return null;
-        }
+        if (prev === node) { setNodeMemories([]); return null; }
         loadNodeMemories(node);
         return node;
       });
     });
 
-    // Click stage to deselect
+    renderer.on('doubleClickNode', ({ node }) => {
+      // Double-click to expand: focus on this node
+      handleFocusEntity(node);
+    });
+
     renderer.on('clickStage', () => {
       setSelectedNode(null);
       setNodeMemories([]);
     });
 
-    // Start FA2 worker for smooth animated layout (runs for 3s then stops)
-    if (graph.order > 0) {
+    // Animated layout
+    if (graph.order > 1) {
       if (layoutRef.current) { layoutRef.current.stop(); layoutRef.current.kill(); }
       const layout = new FA2Layout(graph, {
         settings: {
-          gravity: 1,
-          scalingRatio: 8,
-          barnesHutOptimize: graph.order > 100,
-          strongGravityMode: false,
-          slowDown: 10,
+          gravity: graph.order > 50 ? 2 : 1,
+          scalingRatio: graph.order > 50 ? 15 : 10,
+          barnesHutOptimize: graph.order > 50,
+          strongGravityMode: true,
+          slowDown: 5,
+          linLogMode: true,
         },
       });
       layout.start();
       layoutRef.current = layout;
-      // Auto-stop after 4 seconds to save CPU
-      setTimeout(() => { layout.stop(); }, 4000);
+      setTimeout(() => { layout.stop(); }, 3000);
     }
 
     return () => {
@@ -289,190 +330,315 @@ export default function RelationGraph() {
       rendererRef.current = null;
       graphRef.current = null;
     };
-  }, [filteredRelations, selectedNode]);
+  }, [visibleRelations, selectedNode, focusEntity, viewMode]);
 
-  // Node stats
-  const nodeSet = new Set<string>();
-  filteredRelations.forEach(r => { nodeSet.add(r.subject); nodeSet.add(r.object); });
-
-  // Unique agents for legend
+  // Stats
+  const visNodeSet = new Set<string>();
+  visibleRelations.forEach(r => { visNodeSet.add(r.subject); visNodeSet.add(r.object); });
   const agentIds = [...new Set(relations.map(r => r.agent_id || 'default'))];
 
-  // Node connections for selected node
+  // Top entities for quick access
+  const topEntities = useMemo(() =>
+    [...nodeDegree.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12),
+  [nodeDegree]);
+
   const selectedRelations = selectedNode
-    ? filteredRelations.filter(r => r.subject === selectedNode || r.object === selectedNode)
+    ? visibleRelations.filter(r => r.subject === selectedNode || r.object === selectedNode)
     : [];
+
+  const sourceBadge = (source: string) => {
+    const isExtraction = source === 'extraction' || source === 'flush';
+    return (
+      <span style={{
+        fontSize: 10, padding: '1px 6px', borderRadius: 3,
+        background: isExtraction ? 'rgba(34,197,94,0.15)' : 'rgba(99,102,241,0.15)',
+        color: isExtraction ? '#22c55e' : '#818cf8', fontWeight: 500,
+      }}>
+        {isExtraction ? t('relations.sourceExtraction') : t('relations.sourceManual')}
+      </span>
+    );
+  };
 
   return (
     <div>
       <h1 className="page-title">{t('relations.title')}</h1>
 
-      {/* Toolbar */}
-      <div className="toolbar">
+      {/* Top toolbar */}
+      <div className="toolbar" style={{ flexWrap: 'wrap', gap: 8 }}>
+        {/* Mode toggle */}
+        <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
+          <button
+            onClick={() => { setViewMode('explore'); if (!focusEntity && topEntities.length > 0) handleFocusEntity(topEntities[0]![0]); }}
+            style={{
+              padding: '4px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
+              background: viewMode === 'explore' ? 'var(--primary)' : 'transparent',
+              color: viewMode === 'explore' ? '#fff' : 'var(--text-muted)',
+            }}
+          >🔍 Explorer</button>
+          <button
+            onClick={() => setViewMode('full')}
+            style={{
+              padding: '4px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
+              background: viewMode === 'full' ? 'var(--primary)' : 'transparent',
+              color: viewMode === 'full' ? '#fff' : 'var(--text-muted)',
+            }}
+          >🌐 Full Graph</button>
+        </div>
+
+        {/* Search (explore mode) */}
+        {viewMode === 'explore' && (
+          <div style={{ position: 'relative', flex: '1 1 200px', maxWidth: 300 }}>
+            <input
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Search entity..."
+              style={{ width: '100%', fontSize: 13, padding: '5px 10px' }}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && entitySuggestions.length > 0) {
+                  handleFocusEntity(entitySuggestions[0]!.name);
+                }
+              }}
+            />
+            {entitySuggestions.length > 0 && searchQuery !== focusEntity && (
+              <div style={{
+                position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
+                background: 'var(--bg-card, #1e1e2e)', border: '1px solid var(--border)',
+                borderRadius: 6, marginTop: 2, overflow: 'hidden',
+              }}>
+                {entitySuggestions.map(s => (
+                  <div
+                    key={s.name}
+                    onClick={() => handleFocusEntity(s.name)}
+                    style={{
+                      padding: '6px 12px', cursor: 'pointer', fontSize: 13,
+                      display: 'flex', justifyContent: 'space-between',
+                      borderBottom: '1px solid var(--border)',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'rgba(99,102,241,0.1)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <span>{s.name}</span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>{s.degree} edges</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Depth control (explore mode) */}
+        {viewMode === 'explore' && focusEntity && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Depth:</span>
+            {[1, 2, 3].map(d => (
+              <button
+                key={d}
+                onClick={() => setExpandDepth(d)}
+                style={{
+                  width: 26, height: 26, borderRadius: 4, border: 'none', cursor: 'pointer',
+                  fontSize: 12, fontWeight: 600,
+                  background: expandDepth === d ? 'var(--primary)' : 'rgba(100,100,140,0.2)',
+                  color: expandDepth === d ? '#fff' : 'var(--text-muted)',
+                }}
+              >{d}</button>
+            ))}
+          </div>
+        )}
+
         {predicates.length > 0 && (
-          <select value={predicateFilter} onChange={e => { setPredicateFilter(e.target.value); setTablePage(0); }}>
-            <option value="">{t('relations.allPredicates', { count: predicates.length })}</option>
+          <select value={predicateFilter} onChange={e => { setPredicateFilter(e.target.value); setTablePage(0); }} style={{ fontSize: 12 }}>
+            <option value="">All ({predicates.length})</option>
             {predicates.map(p => (
               <option key={p} value={p}>{p} ({relations.filter(r => r.predicate === p).length})</option>
             ))}
           </select>
         )}
-        {selectedNode && (
-          <button className="btn" onClick={() => { setSelectedNode(null); setNodeMemories([]); }} style={{ fontSize: 12 }}>
-            ✕ {selectedNode}
-          </button>
-        )}
-        <button
-          onClick={() => setAutoRefresh(!autoRefresh)}
-          title={t('relations.autoRefresh')}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            fontSize: 11, padding: '3px 8px',
-            background: autoRefresh ? 'rgba(34,197,94,0.15)' : 'transparent',
-            color: autoRefresh ? '#22c55e' : 'var(--text-muted)',
-            border: `1px solid ${autoRefresh ? 'rgba(34,197,94,0.3)' : 'var(--border)'}`,
-            borderRadius: 'var(--radius)', cursor: 'pointer',
-            whiteSpace: 'nowrap', transition: 'all 0.15s',
-          }}
-        >{autoRefresh ? '⏸' : '▶'} {t('relations.autoRefresh')}</button>
-        <button className="btn" onClick={load} style={{ fontSize: 11, padding: '3px 8px' }}>
-          {t('common.refresh') || 'Refresh'}
-        </button>
+
         <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-          {t('relations.nodeEdgeCount', { nodes: nodeSet.size, edges: filteredRelations.length })}
+          {visNodeSet.size} nodes · {visibleRelations.length} edges
+          {viewMode === 'full' && ` / ${nodeDegree.size} total`}
         </span>
+
         <div style={{ flex: 1 }} />
-        <button className="btn primary" onClick={() => setCreating(true)}>{t('relations.newRelation')}</button>
+        <button className="btn" onClick={load} style={{ fontSize: 11, padding: '3px 8px' }}>↻</button>
+        <button className="btn primary" onClick={() => setCreating(true)} style={{ fontSize: 12 }}>+ New</button>
       </div>
 
-      {/* Confidence threshold slider */}
+      {/* Quick entities (explore mode) */}
+      {viewMode === 'explore' && !focusEntity && topEntities.length > 0 && (
+        <div style={{ margin: '12px 0', padding: '12px 16px', background: 'var(--bg-card, rgba(30,30,50,0.5))', borderRadius: 8 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>Top entities — click to explore</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {topEntities.map(([name, deg]) => (
+              <button
+                key={name}
+                onClick={() => handleFocusEntity(name)}
+                style={{
+                  padding: '4px 12px', borderRadius: 16, fontSize: 12, cursor: 'pointer',
+                  background: 'rgba(99,102,241,0.15)', color: '#818cf8',
+                  border: '1px solid rgba(99,102,241,0.3)',
+                }}
+              >
+                {name} <span style={{ opacity: 0.6 }}>({deg})</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Confidence slider + legend */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '8px 0 12px', padding: '8px 12px', background: 'var(--bg-card, rgba(30,30,50,0.5))', borderRadius: 'var(--radius)', fontSize: 13 }}>
-        <label style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-          {t('relations.confidence') || 'Confidence'} ≥ {confidenceThreshold.toFixed(2)}
+        <label style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap', fontSize: 12 }}>
+          Conf ≥ {confidenceThreshold.toFixed(2)}
         </label>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.05"
-          value={confidenceThreshold}
-          onChange={e => { setConfidenceThreshold(parseFloat(e.target.value)); setTablePage(0); }}
-          style={{ flex: 1, maxWidth: 300 }}
-        />
-        {/* Agent color legend */}
+        <input type="range" min="0" max="1" step="0.05" value={confidenceThreshold}
+          onChange={e => setConfidenceThreshold(parseFloat(e.target.value))} style={{ flex: 1, maxWidth: 200 }} />
         {agentIds.length > 1 && (
-          <div style={{ display: 'flex', gap: 8, marginLeft: 16, flexWrap: 'wrap' }}>
-            {agentIds.slice(0, 8).map(aid => (
-              <span key={aid} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: getAgentColor(aid, agentColorMap.current), display: 'inline-block' }} />
-                <span style={{ color: 'var(--text-muted)' }}>{aid.length > 12 ? aid.slice(0, 11) + '…' : aid}</span>
+          <div style={{ display: 'flex', gap: 8, marginLeft: 8, flexWrap: 'wrap' }}>
+            {agentIds.slice(0, 6).map(aid => (
+              <span key={aid} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: getAgentColor(aid, agentColorMap.current), display: 'inline-block' }} />
+                <span style={{ color: 'var(--text-muted)' }}>{aid.length > 10 ? aid.slice(0, 9) + '…' : aid}</span>
               </span>
             ))}
+            {focusEntity && <span style={{ fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#f59e0b', display: 'inline-block' }} />
+              <span style={{ color: '#f59e0b' }}>focus</span>
+            </span>}
           </div>
         )}
       </div>
 
-      {/* Sigma.js graph container */}
-      {filteredRelations.length > 0 && (
+      {/* Graph */}
+      {visibleRelations.length > 0 ? (
         <div className="card" style={{ marginBottom: 16, position: 'relative' }}>
-          <div
-            ref={containerRef}
-            style={{
-              height: 'calc(100vh - 200px)',
-              minHeight: 400,
-              background: '#0f0f1a',
-              borderRadius: 8,
-            }}
-          />
-          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
-            {t('relations.graphHint')} {t('relations.zoomHint')}
-          </p>
-          {tooMany && (
-            <p style={{ fontSize: 12, color: '#f59e0b', marginTop: 4 }}>
-              {t('relations.tooMany')}
-            </p>
-          )}
+          <div ref={containerRef} style={{ height: 'calc(100vh - 280px)', minHeight: 400, background: '#0f0f1a', borderRadius: 8 }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>
+            <span>Click node to highlight · Double-click to explore · Scroll to zoom · Drag to pan</span>
+            {focusEntity && <span>Exploring: <strong style={{ color: '#f59e0b' }}>{focusEntity}</strong> (depth {expandDepth})</span>}
+          </div>
+        </div>
+      ) : viewMode === 'explore' && !focusEntity ? (
+        <div className="card" style={{ padding: 40, textAlign: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🕸️</div>
+          <div style={{ fontSize: 15, color: 'var(--text-muted)' }}>Search for an entity or click one above to start exploring</div>
+        </div>
+      ) : (
+        <div className="card" style={{ padding: 40, textAlign: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 15, color: 'var(--text-muted)' }}>No relations match current filters</div>
         </div>
       )}
 
-      {/* Selected node detail panel */}
+      {/* Selected node panel */}
       {selectedNode && (
         <div className="card" style={{ marginBottom: 16 }}>
-          <h3 style={{ marginBottom: 12 }}>{t('relations.entity', { name: selectedNode })}</h3>
-
-          {/* Connections */}
-          <div style={{ marginBottom: 16 }}>
-            <h4 style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>{t('relations.connections', { count: selectedRelations.length })}</h4>
-            {selectedRelations.map(r => (
-              <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 13 }}>
-                <span style={{ fontWeight: 600 }}>{r.subject}</span>
-                <span style={{ color: 'var(--primary)', fontSize: 12 }}>{r.predicate}</span>
-                <span style={{ fontWeight: 600 }}>{r.object}</span>
-                {sourceBadge(r.source)}
-                <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>{t('relations.conf')}: {r.confidence?.toFixed(2)}</span>
-              </div>
-            ))}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h3 style={{ margin: 0 }}>📍 {selectedNode}</h3>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {selectedNode !== focusEntity && (
+                <button className="btn" onClick={() => handleFocusEntity(selectedNode)} style={{ fontSize: 11 }}>
+                  🔍 Explore this
+                </button>
+              )}
+              <button className="btn" onClick={() => { setSelectedNode(null); setNodeMemories([]); }} style={{ fontSize: 11 }}>✕</button>
+            </div>
           </div>
 
-          {/* Related memories */}
-          <h4 style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>{t('relations.relatedMemories')}</h4>
-          {loadingMemories ? (
-            <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>{t('common.loading')}</div>
-          ) : nodeMemories.length === 0 ? (
-            <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>{t('relations.noMemories')}</div>
-          ) : (
-            nodeMemories.map((m: any) => (
-              <div key={m.id} className="memory-card" style={{ padding: 10 }}>
-                <div className="header">
-                  <span className={`badge ${m.layer}`}>{m.layer}</span>
-                  <span className="badge" style={{ background: 'rgba(59,130,246,0.2)', color: '#60a5fa' }}>{m.category}</span>
-                </div>
-                <div style={{ fontSize: 13 }}>{m.content?.slice(0, 200)}{m.content?.length > 200 ? '...' : ''}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            {/* Connections */}
+            <div>
+              <h4 style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+                Connections ({selectedRelations.length})
+              </h4>
+              <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+                {selectedRelations.map(r => {
+                  const other = r.subject === selectedNode ? r.object : r.subject;
+                  const direction = r.subject === selectedNode ? '→' : '←';
+                  return (
+                    <div key={r.id} style={{
+                      display: 'flex', alignItems: 'center', gap: 6, padding: '5px 0',
+                      borderBottom: '1px solid var(--border)', fontSize: 12,
+                    }}>
+                      <span style={{ color: '#818cf8', minWidth: 60, fontSize: 11 }}>{r.predicate}</span>
+                      <span>{direction}</span>
+                      <span
+                        style={{ cursor: 'pointer', color: 'var(--primary)', fontWeight: 500 }}
+                        onClick={() => handleFocusEntity(other)}
+                      >{other}</span>
+                      <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)' }}>
+                        {r.confidence?.toFixed(2)}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
-            ))
-          )}
+            </div>
+
+            {/* Related memories */}
+            <div>
+              <h4 style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>Related Memories</h4>
+              <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+                {loadingMemories ? (
+                  <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>{t('common.loading')}</div>
+                ) : nodeMemories.length === 0 ? (
+                  <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No memories found</div>
+                ) : (
+                  nodeMemories.slice(0, 5).map((m: any) => (
+                    <div key={m.id} style={{ padding: 8, marginBottom: 4, background: 'rgba(99,102,241,0.05)', borderRadius: 6, fontSize: 12 }}>
+                      <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
+                        <span className={`badge ${m.layer}`} style={{ fontSize: 10 }}>{m.layer}</span>
+                        <span className="badge" style={{ fontSize: 10, background: 'rgba(59,130,246,0.2)', color: '#60a5fa' }}>{m.category}</span>
+                      </div>
+                      <div style={{ color: 'var(--text)' }}>{m.content?.slice(0, 120)}{m.content?.length > 120 ? '…' : ''}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Table view */}
-      {filteredRelations.length === 0 ? (
-        <div className="empty">{predicateFilter ? t('relations.noRelationsFiltered', { predicate: predicateFilter }) : t('relations.noRelations')}</div>
-      ) : (
+      {/* Relation table */}
+      {(viewMode === 'full' || focusEntity) && visibleRelations.length > 0 && (
         <div className="card" style={{ overflowX: 'auto' }}>
-          <table style={{ minWidth: 700 }}>
+          <table style={{ minWidth: 600 }}>
             <thead>
-              <tr><th>{t('relations.subject')}</th><th>{t('relations.predicate')}</th><th>{t('relations.object')}</th><th>{t('relations.confidence')}</th><th style={{ whiteSpace: 'nowrap' }}>{t('relations.extractionCount')}</th><th style={{ whiteSpace: 'nowrap' }}>{t('relations.source')}</th><th style={{ whiteSpace: 'nowrap' }}>{t('relations.created')}</th><th></th></tr>
+              <tr>
+                <th>Subject</th><th>Predicate</th><th>Object</th>
+                <th>Conf</th><th>Source</th><th></th>
+              </tr>
             </thead>
             <tbody>
-              {filteredRelations.slice(tablePage * tableLimit, (tablePage + 1) * tableLimit).map(r => (
-                <tr key={r.id} style={{ background: selectedNode && (r.subject === selectedNode || r.object === selectedNode) ? 'rgba(99,102,241,0.1)' : undefined }}>
-                  <td style={{ cursor: 'pointer', color: 'var(--primary)' }} onClick={() => { setSelectedNode(r.subject); loadNodeMemories(r.subject); }}>{r.subject}</td>
-                  <td>{r.predicate}</td>
-                  <td style={{ cursor: 'pointer', color: 'var(--primary)' }} onClick={() => { setSelectedNode(r.object); loadNodeMemories(r.object); }}>{r.object}</td>
+              {visibleRelations.slice(tablePage * tableLimit, (tablePage + 1) * tableLimit).map(r => (
+                <tr key={r.id}>
+                  <td style={{ cursor: 'pointer', color: 'var(--primary)' }}
+                    onClick={() => handleFocusEntity(r.subject)}>{r.subject}</td>
+                  <td style={{ fontSize: 12, color: '#818cf8' }}>{r.predicate}</td>
+                  <td style={{ cursor: 'pointer', color: 'var(--primary)' }}
+                    onClick={() => handleFocusEntity(r.object)}>{r.object}</td>
                   <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <div style={{ width: 40, height: 4, background: 'var(--border)', borderRadius: 2 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <div style={{ width: 32, height: 3, background: 'var(--border)', borderRadius: 2 }}>
                         <div style={{ width: `${(r.confidence ?? 0) * 100}%`, height: '100%', background: 'var(--primary)', borderRadius: 2 }} />
                       </div>
-                      {r.confidence?.toFixed(2)}
+                      <span style={{ fontSize: 11 }}>{r.confidence?.toFixed(2)}</span>
                     </div>
                   </td>
-                  <td>
-                    {r.extraction_count ?? 1}
-                    {r.expired ? <span style={{ marginLeft: 4, fontSize: 10, color: '#f59e0b' }}>{t('relations.expired')}</span> : null}
-                  </td>
                   <td>{sourceBadge(r.source)}</td>
-                  <td>{toLocal(r.created_at, 'date')}</td>
-                  <td><button className="btn danger" onClick={() => handleDelete(r.id)}>x</button></td>
+                  <td><button className="btn danger" onClick={() => handleDelete(r.id)} style={{ fontSize: 10, padding: '2px 6px' }}>×</button></td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {filteredRelations.length > tableLimit && (
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginTop: 12, gap: 8 }}>
-              <button className="btn" disabled={tablePage === 0} onClick={() => setTablePage(p => p - 1)}>{t('common.prev')}</button>
-              <span style={{ padding: '8px 16px', color: 'var(--text-muted)', fontSize: 13 }}>{t('common.page', { current: tablePage + 1, total: Math.ceil(filteredRelations.length / tableLimit) })}</span>
-              <button className="btn" disabled={(tablePage + 1) * tableLimit >= filteredRelations.length} onClick={() => setTablePage(p => p + 1)}>{t('common.next')}</button>
+          {visibleRelations.length > tableLimit && (
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 12 }}>
+              <button className="btn" disabled={tablePage === 0} onClick={() => setTablePage(p => p - 1)}>←</button>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)', padding: '6px 12px' }}>
+                {tablePage + 1} / {Math.ceil(visibleRelations.length / tableLimit)}
+              </span>
+              <button className="btn" disabled={(tablePage + 1) * tableLimit >= visibleRelations.length}
+                onClick={() => setTablePage(p => p + 1)}>→</button>
             </div>
           )}
         </div>
@@ -484,26 +650,26 @@ export default function RelationGraph() {
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h2>{t('relations.newRelationTitle')}</h2>
             <div className="form-group">
-              <label>{t('relations.subject')}</label>
-              <input value={newRel.subject} onChange={e => setNewRel({ ...newRel, subject: e.target.value })} placeholder={t('relations.subjectPlaceholder')} />
+              <label>Subject</label>
+              <input value={newRel.subject} onChange={e => setNewRel({ ...newRel, subject: e.target.value })} />
             </div>
             <div className="form-group">
-              <label>{t('relations.predicate')}</label>
-              <input value={newRel.predicate} onChange={e => setNewRel({ ...newRel, predicate: e.target.value })} placeholder={t('relations.predicatePlaceholder')} />
+              <label>Predicate</label>
+              <input value={newRel.predicate} onChange={e => setNewRel({ ...newRel, predicate: e.target.value })} />
             </div>
             <div className="form-group">
-              <label>{t('relations.object')}</label>
-              <input value={newRel.object} onChange={e => setNewRel({ ...newRel, object: e.target.value })} placeholder={t('relations.objectPlaceholder')} />
+              <label>Object</label>
+              <input value={newRel.object} onChange={e => setNewRel({ ...newRel, object: e.target.value })} />
             </div>
             <div className="form-group">
-              <label>{t('relations.confidence')} ({newRel.confidence.toFixed(2)})</label>
+              <label>Confidence ({newRel.confidence.toFixed(2)})</label>
               <input type="range" min="0" max="1" step="0.05" value={newRel.confidence}
                 onChange={e => setNewRel({ ...newRel, confidence: parseFloat(e.target.value) })} />
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button className="btn" onClick={() => setCreating(false)}>{t('common.cancel')}</button>
+              <button className="btn" onClick={() => setCreating(false)}>Cancel</button>
               <button className="btn primary" onClick={handleCreate}
-                disabled={!newRel.subject || !newRel.predicate || !newRel.object}>{t('common.create')}</button>
+                disabled={!newRel.subject || !newRel.predicate || !newRel.object}>Create</button>
             </div>
           </div>
         </div>
