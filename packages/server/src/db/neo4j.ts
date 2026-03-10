@@ -217,6 +217,46 @@ export async function traverseRelations(entityName: string, opts: {
 }
 
 /**
+ * Find shortest path between two entities.
+ */
+export async function findShortestPath(from: string, to: string, opts: {
+  maxHops?: number;
+  agentId?: string;
+}): Promise<{ path: { entity: string; predicate?: string }[]; hops: number }> {
+  if (!driver) return { path: [], hops: 0 };
+  const session = driver.session();
+  const maxHops = opts.maxHops || 5;
+
+  try {
+    const result = await session.run(`
+      MATCH p=shortestPath((a:Entity {name: $from})-[*1..${maxHops}]-(b:Entity {name: $to}))
+      RETURN [n IN nodes(p) | n.name] AS entities,
+             [r IN relationships(p) | type(r)] AS predicates,
+             length(p) AS hops
+    `, { from, to });
+
+    if (result.records.length === 0) return { path: [], hops: 0 };
+
+    const entities: string[] = result.records[0]!.get('entities');
+    const predicates: string[] = result.records[0]!.get('predicates');
+    const hops = typeof result.records[0]!.get('hops')?.toNumber === 'function'
+      ? result.records[0]!.get('hops').toNumber() : result.records[0]!.get('hops');
+
+    const path: { entity: string; predicate?: string }[] = [];
+    for (let i = 0; i < entities.length; i++) {
+      path.push({ entity: entities[i]! });
+      if (i < predicates.length) {
+        path.push({ predicate: predicates[i]!.toLowerCase().replace(/_/g, ' ') });
+      }
+    }
+
+    return { path, hops };
+  } finally {
+    await session.close();
+  }
+}
+
+/**
  * Get graph statistics for dashboard.
  */
 export async function getGraphStats(): Promise<{ nodes: number; edges: number; agents: string[] }> {

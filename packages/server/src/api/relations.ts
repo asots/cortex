@@ -83,6 +83,17 @@ export function registerRelationsRoutes(app: FastifyInstance): void {
     });
   });
 
+  // Shortest path between two entities (Neo4j only)
+  app.get('/api/v1/relations/path', async (req) => {
+    const q = req.query as any;
+    if (!useNeo4j) return { error: 'Path query requires Neo4j', path: [] };
+    if (!q.from || !q.to) return { error: 'from and to parameters required', path: [] };
+    return neo4jDb.findShortestPath(q.from, q.to, {
+      maxHops: q.hops ? parseInt(q.hops) : 5,
+      agentId: q.agent_id,
+    });
+  });
+
   // Graph stats endpoint
   app.get('/api/v1/relations/stats', async () => {
     if (useNeo4j) {

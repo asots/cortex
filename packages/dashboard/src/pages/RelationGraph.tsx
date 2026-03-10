@@ -1,11 +1,120 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
-import { listRelations, createRelation, deleteRelation, search } from '../api/client.js';
+import { listRelations, createRelation, deleteRelation, search, findPath } from '../api/client.js';
 import { useI18n } from '../i18n/index.js';
 import { toLocal } from '../utils/time.js';
 import Graph from 'graphology';
 import Sigma from 'sigma';
 import forceAtlas2 from 'graphology-layout-forceatlas2';
-import FA2Layout from 'graphology-layout-forceatlas2/worker';
+import louvain from 'graphology-communities-louvain';
+
+// Draw a dark pill-shaped label
+function drawPillLabel(
+  context: CanvasRenderingContext2D,
+  x: number, y: number,
+  label: string,
+  fontSize: number,
+  fontWeight: string,
+  bgColor: string,
+  borderColor: string,
+  textColor: string,
+): void {
+  const font = `${fontWeight} ${fontSize}px "Inter", "SF Pro", -apple-system, sans-serif`;
+  context.font = font;
+
+  const textWidth = context.measureText(label).width;
+  const padding = 6;
+  const bgHeight = fontSize + 8;
+  const bgWidth = textWidth + padding * 2;
+  const top = y - bgHeight / 2;
+  const radius = bgHeight / 2;
+
+  // Pill background
+  context.fillStyle = bgColor;
+  context.beginPath();
+  context.moveTo(x + radius, top);
+  context.lineTo(x + bgWidth - radius, top);
+  context.arc(x + bgWidth - radius, top + radius, radius, -Math.PI / 2, Math.PI / 2);
+  context.lineTo(x + radius, top + bgHeight);
+  context.arc(x + radius, top + radius, radius, Math.PI / 2, -Math.PI / 2);
+  context.closePath();
+  context.fill();
+
+  // Border
+  context.strokeStyle = borderColor;
+  context.lineWidth = 0.5;
+  context.stroke();
+
+  // Text
+  context.fillStyle = textColor;
+  context.textAlign = 'left';
+  context.textBaseline = 'middle';
+  context.fillText(label, x + padding, y + 1);
+}
+
+// Custom label renderer
+function drawCustomLabel(
+  context: CanvasRenderingContext2D,
+  data: any,
+  settings: any,
+): void {
+  if (!data.label) return;
+  const size = settings.labelSize || 12;
+  const x = data.x + data.size + 4;
+  drawPillLabel(context, x, data.y, data.label, size, '600',
+    'rgba(15, 15, 30, 0.85)', 'rgba(99, 102, 241, 0.25)', '#e2e8f0');
+}
+
+// Custom edge label — always horizontal, dark pill background, never upside-down
+function drawCustomEdgeLabel(
+  context: CanvasRenderingContext2D,
+  edgeData: any,
+  sourceData: any,
+  targetData: any,
+  settings: any,
+): void {
+  if (!edgeData.label) return;
+
+  const size = settings.edgeLabelSize || 10;
+  const midX = (sourceData.x + targetData.x) / 2;
+  const midY = (sourceData.y + targetData.y) / 2;
+
+  // Measure text to center the pill
+  const font = `500 ${size}px "Inter", "SF Pro", -apple-system, sans-serif`;
+  context.font = font;
+  const textWidth = context.measureText(edgeData.label).width;
+  const pillWidth = textWidth + 12;
+
+  drawPillLabel(context, midX - pillWidth / 2, midY, edgeData.label, size, '500',
+    'rgba(15, 15, 30, 0.9)', 'rgba(129, 140, 248, 0.3)', '#a5b4fc');
+}
+
+// Custom hover label renderer — same style but slightly brighter
+function drawCustomHover(
+  context: CanvasRenderingContext2D,
+  data: any,
+  settings: any,
+): void {
+  // Draw the node circle with glow
+  context.beginPath();
+  context.arc(data.x, data.y, data.size + 2, 0, Math.PI * 2);
+  context.fillStyle = 'rgba(99, 102, 241, 0.15)';
+  context.fill();
+  context.closePath();
+
+  // Draw the node itself
+  context.beginPath();
+  context.arc(data.x, data.y, data.size, 0, Math.PI * 2);
+  context.fillStyle = data.color;
+  context.fill();
+  context.closePath();
+
+  // Label
+  if (!data.label) return;
+  const size = (settings.labelSize || 12) + 1;
+  const x = data.x + data.size + 4;
+  drawPillLabel(context, x, data.y, data.label, size, '700',
+    'rgba(15, 15, 35, 0.92)', 'rgba(99, 102, 241, 0.4)', '#f1f5f9');
+}
 
 interface Relation {
   id: string;
@@ -31,7 +140,15 @@ function getAgentColor(agentId: string, agentMap: Map<string, number>): string {
   return AGENT_COLORS[agentMap.get(agentId)! % AGENT_COLORS.length]!;
 }
 
-type ViewMode = 'explore' | 'full';
+type ViewMode = 'explore' | 'full' | 'communities';
+
+// Community colors — distinct, saturated
+const COMMUNITY_COLORS = [
+  '#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#3b82f6',
+  '#ec4899', '#14b8a6', '#f97316', '#8b5cf6', '#06b6d4',
+  '#84cc16', '#e11d48', '#0ea5e9', '#a855f7', '#10b981',
+  '#fb923c', '#38bdf8', '#c084fc', '#4ade80', '#fbbf24',
+];
 
 export default function RelationGraph() {
   const [relations, setRelations] = useState<Relation[]>([]);
@@ -47,13 +164,19 @@ export default function RelationGraph() {
   const [searchQuery, setSearchQuery] = useState('');
   const [focusEntity, setFocusEntity] = useState<string | null>(null);
   const [expandDepth, setExpandDepth] = useState(1);
+  const [expandedCommunity, setExpandedCommunity] = useState<number | null>(null);
+  const [pathFrom, setPathFrom] = useState('');
+  const [pathTo, setPathTo] = useState('');
+  const [pathResult, setPathResult] = useState<{ entity: string; predicate?: string }[] | null>(null);
+  const [pathLoading, setPathLoading] = useState(false);
+  const [showPathPanel, setShowPathPanel] = useState(false);
   const [tablePage, setTablePage] = useState(0);
   const tableLimit = 20;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<Sigma | null>(null);
   const graphRef = useRef<Graph | null>(null);
-  const layoutRef = useRef<FA2Layout | null>(null);
+
   const agentColorMap = useRef(new Map<string, number>());
   const { t } = useI18n();
 
@@ -79,6 +202,31 @@ export default function RelationGraph() {
     return result;
   }, [relations, predicateFilter, confidenceThreshold]);
 
+  // Edge colors by predicate type
+  const predicateColors = useMemo(() => {
+    const PRED_PALETTE: Record<string, string> = {
+      'uses': '#3b82f6',      // blue
+      'owns': '#22c55e',      // green
+      'manages': '#f59e0b',   // amber
+      'created': '#8b5cf6',   // purple
+      'belongs_to': '#06b6d4', // cyan
+      'interested_in': '#ec4899', // pink
+      'prefers': '#f97316',   // orange
+      'works_at': '#14b8a6',  // teal
+      'lives_in': '#84cc16',  // lime
+      'not_uses': '#ef4444',  // red
+      'related_to': '#64748b', // slate
+    };
+    const map = new Map<string, string>();
+    for (const r of relations) {
+      const pred = r.predicate.toLowerCase().replace(/\s+/g, '_');
+      if (!map.has(r.predicate)) {
+        map.set(r.predicate, PRED_PALETTE[pred] || PRED_PALETTE[pred.replace(/_/g, ' ')] || '#64748b');
+      }
+    }
+    return map;
+  }, [relations]);
+
   // Build node degree map
   const nodeDegree = useMemo(() => {
     const deg = new Map<string, number>();
@@ -100,25 +248,85 @@ export default function RelationGraph() {
       .map(([name, deg]) => ({ name, degree: deg }));
   }, [searchQuery, nodeDegree]);
 
+  // Max neighbors per node in explore mode (prevents starburst)
+  const MAX_NEIGHBORS = 25;
+
+  // Community detection for full graph
+  const communities = useMemo(() => {
+    if (filteredRelations.length === 0) return { assignments: new Map<string, number>(), groups: new Map<number, string[]>() };
+
+    const g = new Graph({ multi: false, type: 'undirected' });
+    for (const r of filteredRelations) {
+      if (!g.hasNode(r.subject)) g.addNode(r.subject);
+      if (!g.hasNode(r.object)) g.addNode(r.object);
+      if (!g.hasEdge(r.subject, r.object)) g.addEdge(r.subject, r.object);
+    }
+
+    let assignments: Record<string, number> = {};
+    try {
+      assignments = louvain(g, { resolution: 1.2 });
+    } catch {
+      // Fallback: all in one community
+      g.forEachNode(n => { assignments[n] = 0; });
+    }
+
+    const assignMap = new Map<string, number>();
+    const groups = new Map<number, string[]>();
+    for (const [entity, community] of Object.entries(assignments)) {
+      assignMap.set(entity, community);
+      if (!groups.has(community)) groups.set(community, []);
+      groups.get(community)!.push(entity);
+    }
+
+    // Sort each group: highest degree first
+    for (const [, members] of groups) {
+      members.sort((a, b) => (nodeDegree.get(b) || 0) - (nodeDegree.get(a) || 0));
+    }
+
+    return { assignments: assignMap, groups };
+  }, [filteredRelations, nodeDegree]);
+
   // Compute visible relations based on mode
   const visibleRelations = useMemo(() => {
     if (viewMode === 'full') return filteredRelations;
+
+    // Communities mode: show aggregated super-nodes, or expanded community
+    if (viewMode === 'communities') {
+      if (expandedCommunity !== null) {
+        // Show only edges within or touching this community
+        const members = new Set(communities.groups.get(expandedCommunity) || []);
+        return filteredRelations.filter(r => members.has(r.subject) || members.has(r.object));
+      }
+      // Super-node mode: handled in rendering
+      return filteredRelations;
+    }
+
     if (!focusEntity) return [];
 
-    // BFS expansion from focus entity
+    // BFS expansion with per-node neighbor limit
     const visited = new Set<string>([focusEntity]);
     const queue = [focusEntity];
+
     for (let depth = 0; depth < expandDepth; depth++) {
       const nextQueue: string[] = [];
       for (const entity of queue) {
+        // Gather all candidate neighbors with their confidence
+        const candidates: { entity: string; confidence: number }[] = [];
         for (const r of filteredRelations) {
           if (r.subject === entity && !visited.has(r.object)) {
-            visited.add(r.object);
-            nextQueue.push(r.object);
+            candidates.push({ entity: r.object, confidence: r.confidence ?? 0.5 });
           }
           if (r.object === entity && !visited.has(r.subject)) {
-            visited.add(r.subject);
-            nextQueue.push(r.subject);
+            candidates.push({ entity: r.subject, confidence: r.confidence ?? 0.5 });
+          }
+        }
+        // Sort by confidence descending, take top N
+        candidates.sort((a, b) => b.confidence - a.confidence);
+        const limited = candidates.slice(0, MAX_NEIGHBORS);
+        for (const c of limited) {
+          if (!visited.has(c.entity)) {
+            visited.add(c.entity);
+            nextQueue.push(c.entity);
           }
         }
       }
@@ -136,6 +344,27 @@ export default function RelationGraph() {
     setSearchQuery(name);
     loadNodeMemories(name);
   };
+
+  // Path query
+  const handlePathQuery = async () => {
+    if (!pathFrom || !pathTo) return;
+    setPathLoading(true);
+    try {
+      const res = await findPath(pathFrom, pathTo);
+      setPathResult(res.path || []);
+      // Switch to full view to see the path
+      if (res.path?.length > 0) {
+        setViewMode('full');
+      }
+    } catch { setPathResult([]); }
+    setPathLoading(false);
+  };
+
+  // Entities on the current path (for highlighting)
+  const pathEntities = useMemo(() => {
+    if (!pathResult) return new Set<string>();
+    return new Set(pathResult.filter((p: any) => p.entity).map((p: any) => p.entity));
+  }, [pathResult]);
 
   // Handlers
   const handleCreate = async () => {
@@ -164,10 +393,91 @@ export default function RelationGraph() {
 
   useEffect(() => {
     if (!containerRef.current) return;
+
+    // Communities super-node mode
+    if (viewMode === 'communities' && expandedCommunity === null && communities.groups.size > 0) {
+      const graph = new Graph({ multi: true, type: 'directed' });
+      graphRef.current = graph;
+
+      // Create super-nodes for each community
+      const sortedGroups = [...communities.groups.entries()]
+        .sort((a, b) => b[1].length - a[1].length);
+
+      for (const [communityId, members] of sortedGroups) {
+        const color = COMMUNITY_COLORS[communityId % COMMUNITY_COLORS.length]!;
+        const top3 = members.slice(0, 3).join(', ');
+        const label = members.length <= 3 ? top3 : `${top3} +${members.length - 3}`;
+        const size = 8 + Math.sqrt(members.length) * 6;
+        graph.addNode(`community_${communityId}`, {
+          label,
+          size,
+          color,
+          x: Math.random() * 100,
+          y: Math.random() * 100,
+          communityId,
+        });
+      }
+
+      // Count inter-community edges
+      const interEdges = new Map<string, number>();
+      for (const r of filteredRelations) {
+        const c1 = communities.assignments.get(r.subject);
+        const c2 = communities.assignments.get(r.object);
+        if (c1 !== undefined && c2 !== undefined && c1 !== c2) {
+          const key = c1 < c2 ? `${c1}_${c2}` : `${c2}_${c1}`;
+          interEdges.set(key, (interEdges.get(key) || 0) + 1);
+        }
+      }
+
+      for (const [key, count] of interEdges) {
+        const [c1, c2] = key.split('_');
+        const n1 = `community_${c1}`;
+        const n2 = `community_${c2}`;
+        if (graph.hasNode(n1) && graph.hasNode(n2)) {
+          graph.addEdge(n1, n2, {
+            size: 1 + Math.log(count + 1),
+            color: 'rgba(120, 120, 180, 0.3)',
+            label: `${count}`,
+          });
+        }
+      }
+
+      // Layout
+      if (graph.order > 0) {
+        forceAtlas2.assign(graph, {
+          iterations: 200,
+          settings: { gravity: 2, scalingRatio: 30, strongGravityMode: true, linLogMode: true },
+        });
+      }
+
+      const renderer = new Sigma(graph, containerRef.current, {
+        renderEdgeLabels: true,
+        defaultEdgeType: 'arrow',
+        labelRenderedSizeThreshold: 0,
+        labelSize: 11,
+        labelWeight: '600',
+        labelColor: { color: '#e2e8f0' },
+        edgeLabelColor: { color: '#7c8194' },
+        edgeLabelSize: 9,
+        defaultDrawNodeLabel: drawCustomLabel,
+        defaultDrawNodeHover: drawCustomHover,
+        defaultDrawEdgeLabel: drawCustomEdgeLabel,
+      });
+      rendererRef.current = renderer;
+
+      // Click to expand community
+      renderer.on('clickNode', ({ node }) => {
+        const attrs = graph.getNodeAttributes(node);
+        if (attrs.communityId !== undefined) {
+          setExpandedCommunity(attrs.communityId);
+        }
+      });
+
+      return () => { renderer.kill(); rendererRef.current = null; graphRef.current = null; };
+    }
+
     if (visibleRelations.length === 0) {
-      // Clean up existing renderer
       if (rendererRef.current) { rendererRef.current.kill(); rendererRef.current = null; }
-      if (layoutRef.current) { layoutRef.current.stop(); layoutRef.current.kill(); layoutRef.current = null; }
       if (graphRef.current) { graphRef.current = null; }
       return;
     }
@@ -204,7 +514,12 @@ export default function RelationGraph() {
     for (const [entity, deg] of visDegree) {
       const isFocus = entity === focusEntity;
       const size = isFocus ? 20 : 5 + (deg / maxDeg) * 15;
-      const color = isFocus ? '#f59e0b' : getAgentColor(getNodeAgent(entity), agentColorMap.current);
+      // In communities mode: color by community. Otherwise: color by agent.
+      const communityId = communities.assignments.get(entity);
+      const color = isFocus ? '#f59e0b'
+        : (viewMode === 'communities' && communityId !== undefined)
+          ? COMMUNITY_COLORS[communityId % COMMUNITY_COLORS.length]!
+          : getAgentColor(getNodeAgent(entity), agentColorMap.current);
 
       graph.addNode(entity, {
         label: entity,
@@ -215,80 +530,183 @@ export default function RelationGraph() {
       });
     }
 
-    // Add edges
+    // Add edges — thinner, softer, colored by predicate type
     for (const r of visibleRelations) {
       const conf = r.confidence ?? 0.5;
+      const predColor = predicateColors.get(r.predicate) || '#64748b';
+      const hex = predColor;
+      const rr = parseInt(hex.slice(1, 3), 16);
+      const gg = parseInt(hex.slice(3, 5), 16);
+      const bb = parseInt(hex.slice(5, 7), 16);
+      const alpha = Math.max(0.15, conf * 0.4);
+
       graph.addEdge(r.subject, r.object, {
         label: r.predicate,
-        size: 1 + conf * 2,
-        color: `rgba(120, 120, 180, ${Math.max(0.3, conf * 0.6)})`,
+        size: 0.5 + conf * 1,
+        color: `rgba(${rr}, ${gg}, ${bb}, ${alpha})`,
         type: 'arrow',
       });
     }
 
-    // Layout
+    // Static layout — high iteration count for stable result, no jitter
     if (graph.order > 0) {
       const nodeCount = graph.order;
       forceAtlas2.assign(graph, {
-        iterations: 80,
+        iterations: 300,
         settings: {
-          gravity: nodeCount > 50 ? 2 : 1,
-          scalingRatio: nodeCount > 50 ? 15 : 10,
-          barnesHutOptimize: nodeCount > 50,
+          gravity: 3,
+          scalingRatio: nodeCount > 30 ? 20 : 12,
+          barnesHutOptimize: nodeCount > 30,
           strongGravityMode: true,
-          slowDown: 5,
+          slowDown: 10,
           linLogMode: true,
+          adjustSizes: true,
         },
       });
     }
 
+    // Track hovered node for dynamic label display
+    let hoveredNode: string | null = null;
+
     // Renderer
     const renderer = new Sigma(graph, containerRef.current, {
-      renderEdgeLabels: viewMode === 'explore' && visibleRelations.length < 80,
+      renderEdgeLabels: true,
       defaultEdgeType: 'arrow',
-      labelRenderedSizeThreshold: viewMode === 'explore' ? 4 : 10,
-      labelSize: 13,
-      labelWeight: 'bold',
+      labelRenderedSizeThreshold: 0, // Let nodeReducer fully control label visibility
+      labelSize: 12,
+      labelWeight: '600',
       labelColor: { color: '#e2e8f0' },
-      edgeLabelColor: { color: '#7c8194' },
-      edgeLabelSize: 9,
+      edgeLabelColor: { color: '#a5b4fc' },
+      edgeLabelSize: 11,
+      defaultDrawNodeLabel: drawCustomLabel,
+        defaultDrawNodeHover: drawCustomHover,
+        defaultDrawEdgeLabel: drawCustomEdgeLabel,
       nodeReducer: (node, data) => {
         const res = { ...data };
-        if (selectedNode && selectedNode !== focusEntity) {
-          if (node === selectedNode) {
+        const deg = visDegree.get(node) || 0;
+        const isFocus = node === focusEntity;
+        const isSelected = node === selectedNode;
+        const isHovered = node === hoveredNode;
+
+        const isOnPath = pathEntities.has(node);
+
+        // Label visibility: show for focus, selected, hovered, path, or high-degree
+        const showLabel = isFocus || isSelected || isHovered || isOnPath || deg >= 8;
+        if (!showLabel) {
+          res.label = '';
+        }
+
+        // When a node is selected: only show selected + its neighbors
+        if (selectedNode) {
+          const isConnected = visibleRelations.some(
+            r => (r.subject === selectedNode && r.object === node) ||
+                 (r.object === selectedNode && r.subject === node)
+          );
+          if (isSelected) {
             res.highlighted = true;
             res.zIndex = 1;
+            res.label = data.label;
+            res.color = '#f59e0b'; // Gold for selected
+            res.size = (data.size || 8) + 4;
+          } else if (isConnected) {
+            res.label = data.label; // Show neighbor labels
+            res.size = (data.size || 5) + 2;
           } else {
-            const connected = visibleRelations.some(
-              r => (r.subject === selectedNode && r.object === node) ||
-                   (r.object === selectedNode && r.subject === node)
-            );
-            if (!connected && node !== focusEntity) {
-              res.color = '#2a2e3a';
-              res.label = '';
-            }
+            res.hidden = true; // Completely hide unrelated nodes
           }
         }
-        return res;
-      },
-      edgeReducer: (edge, data) => {
-        const res = { ...data };
-        if (selectedNode && selectedNode !== focusEntity) {
-          const source = graph.source(edge);
-          const target = graph.target(edge);
-          if (source === selectedNode || target === selectedNode) {
-            res.color = 'rgba(99, 102, 241, 0.9)';
-            res.size = (data.size || 2) + 1;
+
+        // Path highlight
+        if (pathEntities.size > 0 && !selectedNode) {
+          if (isOnPath) {
+            res.color = '#f59e0b';
+            res.size = (data.size || 8) + 4;
+            res.label = data.label;
+            res.zIndex = 1;
+          } else {
+            res.color = 'rgba(42, 46, 58, 0.3)';
+            res.label = '';
+          }
+        }
+
+        // Hovered node: show only hovered + neighbors, hide rest
+        if (hoveredNode && !selectedNode && pathEntities.size === 0) {
+          const isConnectedToHover = visibleRelations.some(
+            r => (r.subject === hoveredNode && r.object === node) ||
+                 (r.object === hoveredNode && r.subject === node)
+          );
+          if (isHovered) {
+            res.highlighted = true;
+            res.label = data.label;
+            res.size = (data.size || 8) + 3;
+          } else if (isConnectedToHover) {
+            res.label = data.label;
+            res.size = (data.size || 5) + 1;
           } else {
             res.hidden = true;
           }
         }
+
         return res;
       },
+      edgeReducer: (edge, data) => {
+        const res = { ...data };
+        const source = graph.source(edge);
+        const target = graph.target(edge);
+
+        // Default: hide edge labels (too noisy when all visible)
+        res.label = '';
+
+        if (pathEntities.size > 0 && !selectedNode) {
+          if (pathEntities.has(source) && pathEntities.has(target)) {
+            res.color = 'rgba(245, 158, 11, 0.8)';
+            res.size = 1.5;
+            res.label = data.label; // Show predicate on path
+          } else {
+            res.color = 'rgba(100, 100, 140, 0.03)';
+          }
+        } else if (selectedNode) {
+          if (source === selectedNode || target === selectedNode) {
+            res.color = 'rgba(129, 140, 248, 0.7)';
+            res.size = 1.2;
+            res.label = data.label; // Show predicate on selected edges
+          } else {
+            res.hidden = true;
+          }
+        } else if (hoveredNode) {
+          if (source === hoveredNode || target === hoveredNode) {
+            res.color = 'rgba(167, 139, 250, 0.85)';
+            res.size = 1.5;
+            res.zIndex = 1;
+            res.label = data.label; // Show predicate on hover edges
+          } else {
+            res.hidden = true;
+          }
+        }
+
+        return res;
+      },
+    });
+
+    // Hover events for dynamic label display
+    renderer.on('enterNode', ({ node }) => {
+      hoveredNode = node;
+      renderer.refresh();
+    });
+    renderer.on('leaveNode', () => {
+      hoveredNode = null;
+      renderer.refresh();
     });
     rendererRef.current = renderer;
 
     renderer.on('clickNode', ({ node }) => {
+      // Fly camera to clicked node
+      const nodePos = graph.getNodeAttributes(node);
+      renderer.getCamera().animate(
+        { x: nodePos.x, y: nodePos.y, ratio: 0.3 },
+        { duration: 400 }
+      );
+
       setSelectedNode(prev => {
         if (prev === node) { setNodeMemories([]); return null; }
         loadNodeMemories(node);
@@ -297,40 +715,25 @@ export default function RelationGraph() {
     });
 
     renderer.on('doubleClickNode', ({ node }) => {
-      // Double-click to expand: focus on this node
       handleFocusEntity(node);
     });
 
     renderer.on('clickStage', () => {
       setSelectedNode(null);
       setNodeMemories([]);
+      // Reset camera to show full graph
+      renderer.getCamera().animate({ x: 0.5, y: 0.5, ratio: 1 }, { duration: 300 });
     });
 
-    // Animated layout
-    if (graph.order > 1) {
-      if (layoutRef.current) { layoutRef.current.stop(); layoutRef.current.kill(); }
-      const layout = new FA2Layout(graph, {
-        settings: {
-          gravity: graph.order > 50 ? 2 : 1,
-          scalingRatio: graph.order > 50 ? 15 : 10,
-          barnesHutOptimize: graph.order > 50,
-          strongGravityMode: true,
-          slowDown: 5,
-          linLogMode: true,
-        },
-      });
-      layout.start();
-      layoutRef.current = layout;
-      setTimeout(() => { layout.stop(); }, 3000);
-    }
+    // Static layout only — no animated worker (prevents jitter)
+    // The sync forceAtlas2.assign above already computed positions
 
     return () => {
-      if (layoutRef.current) { layoutRef.current.stop(); layoutRef.current.kill(); layoutRef.current = null; }
       renderer.kill();
       rendererRef.current = null;
       graphRef.current = null;
     };
-  }, [visibleRelations, selectedNode, focusEntity, viewMode]);
+  }, [visibleRelations, selectedNode, focusEntity, viewMode, communities, expandedCommunity]);
 
   // Stats
   const visNodeSet = new Set<string>();
@@ -367,23 +770,29 @@ export default function RelationGraph() {
       <div className="toolbar" style={{ flexWrap: 'wrap', gap: 8 }}>
         {/* Mode toggle */}
         <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
-          <button
-            onClick={() => { setViewMode('explore'); if (!focusEntity && topEntities.length > 0) handleFocusEntity(topEntities[0]![0]); }}
-            style={{
-              padding: '4px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
-              background: viewMode === 'explore' ? 'var(--primary)' : 'transparent',
-              color: viewMode === 'explore' ? '#fff' : 'var(--text-muted)',
-            }}
-          >🔍 Explorer</button>
-          <button
-            onClick={() => setViewMode('full')}
-            style={{
-              padding: '4px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
-              background: viewMode === 'full' ? 'var(--primary)' : 'transparent',
-              color: viewMode === 'full' ? '#fff' : 'var(--text-muted)',
-            }}
-          >🌐 Full Graph</button>
+          {([
+            { mode: 'explore' as ViewMode, icon: '🔍', label: 'Explorer' },
+            { mode: 'communities' as ViewMode, icon: '🫧', label: 'Communities' },
+            { mode: 'full' as ViewMode, icon: '🌐', label: 'Full' },
+          ]).map(({ mode, icon, label }) => (
+            <button
+              key={mode}
+              onClick={() => { setViewMode(mode); setExpandedCommunity(null); if (mode === 'explore' && !focusEntity && topEntities.length > 0) handleFocusEntity(topEntities[0]![0]); }}
+              style={{
+                padding: '4px 12px', fontSize: 12, border: 'none', cursor: 'pointer',
+                background: viewMode === mode ? 'var(--primary)' : 'transparent',
+                color: viewMode === mode ? '#fff' : 'var(--text-muted)',
+              }}
+            >{icon} {label}</button>
+          ))}
         </div>
+
+        {/* Back button for expanded community */}
+        {viewMode === 'communities' && expandedCommunity !== null && (
+          <button className="btn" onClick={() => setExpandedCommunity(null)} style={{ fontSize: 12 }}>
+            ← Back to communities
+          </button>
+        )}
 
         {/* Search (explore mode) */}
         {viewMode === 'explore' && (
@@ -460,6 +869,9 @@ export default function RelationGraph() {
         </span>
 
         <div style={{ flex: 1 }} />
+        <button className="btn" onClick={() => setShowPathPanel(!showPathPanel)} style={{ fontSize: 12 }}>
+          🛤️ Path
+        </button>
         <button className="btn" onClick={load} style={{ fontSize: 11, padding: '3px 8px' }}>↻</button>
         <button className="btn primary" onClick={() => setCreating(true)} style={{ fontSize: 12 }}>+ New</button>
       </div>
@@ -507,17 +919,87 @@ export default function RelationGraph() {
             </span>}
           </div>
         )}
+        {/* Edge type legend */}
+        {predicateColors.size > 0 && (
+          <div style={{ display: 'flex', gap: 8, marginLeft: 8, flexWrap: 'wrap' }}>
+            {[...predicateColors.entries()].slice(0, 6).map(([pred, color]) => (
+              <span key={pred} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10 }}>
+                <span style={{ width: 12, height: 2, background: color, display: 'inline-block', borderRadius: 1 }} />
+                <span style={{ color: 'var(--text-muted)' }}>{pred}</span>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* Path query panel */}
+      {showPathPanel && (
+        <div style={{ margin: '8px 0 12px', padding: '12px 16px', background: 'var(--bg-card, rgba(30,30,50,0.5))', borderRadius: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>🛤️ Shortest Path:</span>
+          <input
+            value={pathFrom}
+            onChange={e => setPathFrom(e.target.value)}
+            placeholder="From entity..."
+            style={{ flex: '1 1 120px', maxWidth: 180, fontSize: 12, padding: '4px 8px' }}
+          />
+          <span style={{ color: 'var(--text-muted)' }}>→</span>
+          <input
+            value={pathTo}
+            onChange={e => setPathTo(e.target.value)}
+            placeholder="To entity..."
+            style={{ flex: '1 1 120px', maxWidth: 180, fontSize: 12, padding: '4px 8px' }}
+          />
+          <button className="btn primary" onClick={handlePathQuery} disabled={pathLoading || !pathFrom || !pathTo} style={{ fontSize: 12 }}>
+            {pathLoading ? '...' : 'Find'}
+          </button>
+          {pathResult && pathResult.length > 0 && (
+            <button className="btn" onClick={() => { setPathResult(null); setPathFrom(''); setPathTo(''); }} style={{ fontSize: 11 }}>✕ Clear</button>
+          )}
+          {pathResult && pathResult.length > 0 && (
+            <div style={{ width: '100%', marginTop: 6, fontSize: 12, display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+              {pathResult.map((p: any, i: number) => (
+                <span key={i} style={{
+                  padding: '2px 8px', borderRadius: 4, fontSize: 11,
+                  background: p.entity ? 'rgba(245, 158, 11, 0.2)' : 'transparent',
+                  color: p.entity ? '#f59e0b' : '#818cf8',
+                  fontWeight: p.entity ? 600 : 400,
+                  cursor: p.entity ? 'pointer' : 'default',
+                }} onClick={() => p.entity && handleFocusEntity(p.entity)}>
+                  {p.entity || `→ ${p.predicate} →`}
+                </span>
+              ))}
+            </div>
+          )}
+          {pathResult && pathResult.length === 0 && (
+            <span style={{ fontSize: 12, color: '#ef4444' }}>No path found</span>
+          )}
+        </div>
+      )}
 
       {/* Graph */}
       {visibleRelations.length > 0 ? (
         <div className="card" style={{ marginBottom: 16, position: 'relative' }}>
           <div ref={containerRef} style={{ height: 'calc(100vh - 280px)', minHeight: 400, background: '#0f0f1a', borderRadius: 8 }} />
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>
-            <span>Click node to highlight · Double-click to explore · Scroll to zoom · Drag to pan</span>
-            {focusEntity && <span>Exploring: <strong style={{ color: '#f59e0b' }}>{focusEntity}</strong> (depth {expandDepth})</span>}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>
+            <span>Click node to focus · Click empty area to reset · Double-click to explore · Scroll to zoom</span>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              {focusEntity && <span>Exploring: <strong style={{ color: '#f59e0b' }}>{focusEntity}</strong> (depth {expandDepth})</span>}
+              {(selectedNode || (rendererRef.current && rendererRef.current.getCamera().ratio < 0.9)) && (
+                <button className="btn" onClick={() => {
+                  setSelectedNode(null);
+                  setNodeMemories([]);
+                  if (rendererRef.current) {
+                    rendererRef.current.getCamera().animate({ x: 0.5, y: 0.5, ratio: 1 }, { duration: 300 });
+                  }
+                }} style={{ fontSize: 10, padding: '2px 8px' }}>
+                  ↺ Reset View
+                </button>
+              )}
+            </div>
           </div>
         </div>
+      ) : viewMode === 'communities' && expandedCommunity === null ? (
+        null /* Communities super-node graph handles its own rendering */
       ) : viewMode === 'explore' && !focusEntity ? (
         <div className="card" style={{ padding: 40, textAlign: 'center', marginBottom: 16 }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>🕸️</div>

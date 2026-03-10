@@ -114,6 +114,11 @@ export const createRelation = (data: any) =>
 export const deleteRelation = (id: string) =>
   request(`/relations/${id}`, { method: 'DELETE' });
 
+export const findPath = (from: string, to: string) =>
+  request(`/relations/path?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+
+export const getRelationStats = () => request('/relations/stats');
+
 // Lifecycle
 export const runLifecycle = (dryRun = false, agentId?: string) =>
   request('/lifecycle/run', { method: 'POST', body: JSON.stringify({ dry_run: dryRun, agent_id: agentId }) });
