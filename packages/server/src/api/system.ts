@@ -149,6 +149,7 @@ export function registerSystemRoutes(app: FastifyInstance, cortex: CortexApp): v
       // Detect compose project name + config file path on host
       let project = 'cortex';
       let composeDir = '/opt/cortex'; // default
+      let composeHostPath = '/opt/cortex/docker-compose.yml';
       try {
         const inspectRes = execSync(
           `curl -s --unix-socket /var/run/docker.sock http://localhost/containers/${hostname}/json`,
@@ -156,26 +157,68 @@ export function registerSystemRoutes(app: FastifyInstance, cortex: CortexApp): v
         );
         const info = JSON.parse(inspectRes);
         project = info?.Config?.Labels?.['com.docker.compose.project'] || 'cortex';
-        // Get the host path of docker-compose.yml from bind mounts
         const mounts = info?.Mounts || [];
         const composeMnt = mounts.find((m: any) => m.Destination === '/app/docker-compose.yml');
         if (composeMnt?.Source) {
+          composeHostPath = composeMnt.Source;
           composeDir = composeMnt.Source.replace(/\/docker-compose\.yml$/, '');
         }
         log.info({ project, composeDir }, 'Detected compose context');
       } catch { /* best effort */ }
 
-      // Step 1: Pull latest image
-      const pullCmd = `cd /app && docker compose -p ${project} pull`;
+      // Step 0: Ensure compose file uses image: mode (not build:)
+      // If docker-compose.yml has `build:` active, pull will silently skip
+      // and `docker compose up` will try to rebuild instead of using the pulled image.
+      try {
+        const composeContent = fs.readFileSync('/app/docker-compose.yml', 'utf-8');
+        // Check the cortex service section (first ~10 lines) for build: vs image:
+        // Only look at the cortex service block, not other services like neo4j
+        const lines = composeContent.split('\n');
+        let hasBuild = false;
+        let hasImage = false;
+        let inCortexService = false;
+        for (const line of lines) {
+          // Detect service blocks by unindented or single-indent names ending with ':'
+          if (/^\s{2}\w+:/.test(line) && !line.trim().startsWith('#')) {
+            inCortexService = /^\s{2}cortex:/.test(line);
+          }
+          if (!inCortexService) continue;
+          const trimmed = line.trim();
+          if (trimmed.startsWith('#')) continue;
+          if (/^\s*build:\s/.test(line)) hasBuild = true;
+          if (/^\s*image:\s/.test(line)) hasImage = true;
+        }
+        if (hasBuild && !hasImage) {
+          // Compose file is in build mode — fix it on the host via docker socket
+          log.warn('Compose file is in build mode, switching to image mode for update');
+          const fixCmd = `docker run --rm -v "${composeDir}:/target" alpine sh -c "sed -i 's|^\\(\\s*\\)build: \\.|\\1# build: .|;s|^\\(\\s*\\)# *image: ghcr|\\1image: ghcr|' /target/docker-compose.yml"`;
+          try {
+            execSync(fixCmd, { timeout: 10000, encoding: 'utf-8', stdio: 'pipe' });
+            log.info('Compose file switched to image mode');
+          } catch (fixErr: any) {
+            log.warn({ error: fixErr.message }, 'Failed to auto-fix compose file, proceeding anyway');
+          }
+        }
+      } catch (e: any) {
+        log.warn({ error: e.message }, 'Could not check compose file mode');
+      }
+
+      // Step 1: Pull latest image (use explicit image name to avoid build: skip)
+      const IMAGE = 'ghcr.io/rikouu/cortex:latest';
       log.info('Pulling latest image...');
       try {
-        execSync(pullCmd, { timeout: 60000, encoding: 'utf-8', stdio: 'pipe' });
+        const pullOutput = execSync(`docker pull ${IMAGE}`, { timeout: 120000, encoding: 'utf-8', stdio: 'pipe' });
+        log.info({ output: pullOutput.trim().split('\n').pop() }, 'Pull complete');
       } catch (pullErr: any) {
         return { ok: false, error: 'Pull failed: ' + (pullErr.stderr || pullErr.message) };
       }
-      log.info('Pull complete.');
 
-      // Step 2: Spawn a helper container to recreate us
+      // Step 2: Remove stale updater container if exists (from a previous failed update)
+      try {
+        execSync('docker rm -f cortex-updater 2>/dev/null', { timeout: 5000, stdio: 'pipe' });
+      } catch { /* ignore — container doesn't exist */ }
+
+      // Step 3: Spawn a helper container to recreate us
       // The helper mounts docker socket + the host's compose directory,
       // waits 2 seconds (for API response), then runs compose up.
       const helperCmd = [
@@ -184,7 +227,7 @@ export function registerSystemRoutes(app: FastifyInstance, cortex: CortexApp): v
         '-v /var/run/docker.sock:/var/run/docker.sock',
         `-v "${composeDir}:/work:ro"`,
         '-w /work',
-        'ghcr.io/rikouu/cortex:latest',
+        IMAGE,
         'sh', '-c',
         `"sleep 2 && docker compose -p ${project} up -d --force-recreate --remove-orphans 2>&1"`,
       ].join(' ');
