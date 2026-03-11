@@ -13,12 +13,14 @@ export interface SearchResult {
   content: string;
   layer: MemoryLayer;
   category: string;
+  agent_id: string;
   importance: number;
   decay_score: number;
   access_count: number;
   created_at: string;
   textScore: number;
   vectorScore: number;
+  rawVectorSim: number; // original cosine similarity before normalization (model-dependent)
   fusedScore: number;
   layerWeight: number;
   recencyBoost: number;
@@ -77,6 +79,7 @@ export class HybridSearchEngine {
     } catch (e: any) {
       log.warn({ error: e.message }, 'FTS search failed');
     }
+
     const textMs = Date.now() - textStart;
 
     // 2. Vector semantic search
@@ -97,8 +100,11 @@ export class HybridSearchEngine {
     const results = this.fuse(textResults, vectorResults, opts);
     const fusionMs = Date.now() - fusionStart;
 
-    // 4. Slice to limit (reranking is done at the gate level after merging expanded queries)
-    const finalResults = results.slice(0, limit);
+    // 4. Filter near-zero scores and slice to limit
+    // Results with finalScore < 0.001 are essentially noise (no meaningful text or vector match).
+    // Keep them only if we'd have fewer than 3 results (sparse corpus fallback).
+    const meaningful = results.filter(r => r.finalScore >= 0.001);
+    const finalResults = (meaningful.length >= 3 ? meaningful : results).slice(0, limit);
 
     // 5. Bump access counts
     if (finalResults.length > 0) {
@@ -134,33 +140,77 @@ export class HybridSearchEngine {
     const scoreMap = new Map<string, {
       memory?: Memory;
       textScore: number;
-      vectorScore: number;
+      vectorScore: number;  // now: cosine similarity (0-1), not RRF rank
     }>();
 
-    const RRF_K = 60; // RRF constant (standard value)
+    const RRF_K = 60; // RRF constant for text (BM25) ranking
 
-    // RRF: score = 1/(k + rank), rank is 0-indexed position
-    // Text results: already sorted by FTS5 rank (best first)
+    // Text results: use RRF rank score (appropriate for BM25 ranked lists)
     for (let i = 0; i < textResults.length; i++) {
       const r = textResults[i]!;
       const rrfScore = 1 / (RRF_K + i);
       scoreMap.set(r.id, { memory: r, textScore: rrfScore, vectorScore: 0 });
     }
 
-    // Vector results: already sorted by distance (best first)
-    // Collect missing IDs for batch query (avoid N+1)
+    // Vector results: use cosine similarity (1 - distance) instead of RRF rank
+    // Different embedding models have different similarity ranges:
+    //   text-embedding-3-small: 0.0-0.3 typical, 0.4+ = highly relevant
+    //   text-embedding-3-large: 0.0-0.5 typical, 0.6+ = highly relevant
+    //   nomic-embed-text: 0.2-0.8 typical range
+    // Strategy: absolute threshold filters junk, then adaptive normalization
+    // stretches the actual range to 0-1 for model-agnostic scoring.
+    const minSimilarity = this.config.minSimilarity ?? 0.01; // Fix 2: absolute floor
     const missingIds: string[] = [];
     const vectorScores = new Map<string, number>();
+    const rawVectorSims = new Map<string, number>(); // track pre-normalization sims
 
-    for (let i = 0; i < vectorResults.length; i++) {
-      const r = vectorResults[i]!;
-      const rrfScore = 1 / (RRF_K + i);
+    // Phase 1: Compute raw cosine similarities, apply absolute threshold
+    // sqlite-vec (vec0) returns L2 (Euclidean) distance, not cosine distance.
+    // For normalized embeddings: L2² = 2*(1 - cosine_sim), so cosine_sim = 1 - L2²/2
+    // Qdrant/Milvus already return cosine distance (1 - cosine_sim) via their adapters.
+    // Detect by checking if distances > 1 (cosine distance is always 0-2, but L2 for
+    // normalized vectors typically clusters around 0.8-1.4, while cosine distance 0-0.5)
+    const isL2Distance = vectorResults.length > 0 && vectorResults[0]!.distance > 1;
+    const rawSims: { id: string; sim: number }[] = [];
+    for (const r of vectorResults) {
+      const cosineSim = isL2Distance
+        ? Math.max(0, 1 - (r.distance * r.distance) / 2)  // L2 → cosine
+        : Math.max(0, 1 - r.distance);                     // cosine distance → cosine sim
+      if (cosineSim < minSimilarity) continue;
+      rawSims.push({ id: r.id, sim: cosineSim });
+    }
+
+    // Phase 2: Adaptive normalization — model-agnostic
+    // Uses the spread between best and median (not worst) to be robust
+    // If best match is barely better than worst → all scores low (nothing relevant)
+    const bestSim = rawSims.length > 0 ? rawSims[0]!.sim : 0;
+    const medianIdx = Math.floor(rawSims.length / 2);
+    const medianSim = rawSims.length > 2 ? rawSims[medianIdx]!.sim : (rawSims[rawSims.length - 1]?.sim ?? 0);
+    const spread = bestSim - medianSim; // how much better is top vs typical
+
+    // Quality gate: if the best result isn't meaningfully better than median,
+    // the query has no good matches — suppress all vector scores
+    const SPREAD_THRESHOLD = rawSims.length < 5 ? 0.001 : 0.005; // relax for small corpus
+    const hasGoodMatches = spread > SPREAD_THRESHOLD;
+
+    for (const r of rawSims) {
+      let normalizedSim: number;
+      if (!hasGoodMatches) {
+        // No result stands out — scale all down to near-zero
+        normalizedSim = r.sim * 0.1; // preserve ordering but with minimal weight
+      } else {
+        // Stretch [medianSim, bestSim] → [0, 1]
+        normalizedSim = Math.max(0, Math.min(1, (r.sim - medianSim) / spread));
+      }
+
       const existing = scoreMap.get(r.id);
       if (existing) {
-        existing.vectorScore = rrfScore;
+        existing.vectorScore = normalizedSim;
+        (existing as any).rawVectorSim = r.sim;
       } else {
         missingIds.push(r.id);
-        vectorScores.set(r.id, rrfScore);
+        vectorScores.set(r.id, normalizedSim);
+        rawVectorSims.set(r.id, r.sim);
       }
     }
 
@@ -181,7 +231,7 @@ export class HybridSearchEngine {
       }
     }
 
-    // Compute final scores using RRF fusion
+    // Compute final scores — relevance-first ranking
     const vw = this.config.vectorWeight;
     const tw = this.config.textWeight;
     const results: SearchResult[] = [];
@@ -192,11 +242,12 @@ export class HybridSearchEngine {
 
       if (opts.layers && !opts.layers.includes(m.layer)) continue;
       if (opts.categories && !opts.categories.includes(m.category)) continue;
-      if (opts.agent_id && m.agent_id !== opts.agent_id) continue;
+      // agent_id filter: null/undefined agent_id memories are shared (match any agent)
+      if (opts.agent_id && m.agent_id && m.agent_id !== opts.agent_id) continue;
 
       const layerWeight = LAYER_WEIGHTS[m.layer] || 0.5;
 
-      // Recency boost: use last_confirmed_at if available, else created_at
+      // Recency boost: reduced from 0.1 to 0.03 (Fix 6: don't overpower relevance)
       let recencyBase = new Date(m.created_at).getTime();
       try {
         if (m.metadata) {
@@ -207,12 +258,13 @@ export class HybridSearchEngine {
         }
       } catch { /* use created_at */ }
       const daysSinceConfirmed = (Date.now() - recencyBase) / 86_400_000;
-      const recencyBoost = 1.0 + 0.1 * Math.exp(-daysSinceConfirmed / 14);
+      const recencyBoost = 1.0 + 0.03 * Math.exp(-daysSinceConfirmed / 14);
 
-      // Access frequency boost
-      const accessBoost = 1.0 + 0.05 * Math.min(m.access_count, this.config.accessBoostCap);
+      // Access frequency boost: reduced from 0.05 to 0.02 (Fix 6)
+      const accessBoost = 1.0 + 0.02 * Math.min(m.access_count, this.config.accessBoostCap);
 
-      // RRF fusion: weighted sum of rank-based scores
+      // Fix 7: importance does NOT affect search ranking
+      // (importance is used later for injection priority, not search)
       const fusedScore = vw * entry.vectorScore + tw * entry.textScore;
       const finalScore = fusedScore * layerWeight * recencyBoost * accessBoost * m.decay_score;
 
@@ -221,12 +273,14 @@ export class HybridSearchEngine {
         content: m.content,
         layer: m.layer,
         category: m.category,
+        agent_id: m.agent_id,
         importance: m.importance,
         decay_score: m.decay_score,
         access_count: m.access_count,
         created_at: m.created_at,
         textScore: entry.textScore,
         vectorScore: entry.vectorScore,
+        rawVectorSim: (entry as any).rawVectorSim ?? rawVectorSims.get(id) ?? 0,
         fusedScore,
         layerWeight,
         recencyBoost,

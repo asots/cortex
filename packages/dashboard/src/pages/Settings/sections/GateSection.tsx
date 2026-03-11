@@ -21,9 +21,18 @@ export default function GateSection({
       {sectionHeader(t('settings.gateTitle'), 'gate')}
       {editing ? (
         <div style={{ padding: '4px 0' }}>
-          {renderNumberField(`💉 ${t('settings.injectionBudget')}`, t('settings.injectionBudgetDesc'), 'maxInjectionTokens', 500, 50000)}
+          {renderNumberField(`📌 ${t('settings.fixedBudget')}`, t('settings.fixedBudgetDesc'), 'fixedInjectionTokens', 50)}
+          {renderNumberField(`💉 ${t('settings.memoryBudget')}`, t('settings.memoryBudgetDesc'), 'maxInjectionTokens', 100)}
+          {renderNumberField(`🔗 ${t('settings.relationBudget')}`, t('settings.relationBudgetDesc'), 'relationBudget', 0)}
           {renderNumberField(`🔍 ${t('settings.searchCandidates')}`, t('settings.searchCandidatesDesc'), 'searchLimit', 5, 50)}
           {renderToggleField(t('settings.skipSmallTalk'), t('settings.skipSmallTalkDesc'), 'skipSmallTalk')}
+
+          <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 12 }}>
+            <label style={{ fontWeight: 600, display: 'block', marginBottom: 8 }}>✂️ {t('settings.cliffFilter')}</label>
+            {renderNumberField(t('settings.cliffAbsolute'), t('settings.cliffAbsoluteDesc'), 'cliffAbsolute', 0.1, 0.9)}
+            {renderNumberField(t('settings.cliffGap'), t('settings.cliffGapDesc'), 'cliffGap', 0.1, 0.9)}
+            {renderNumberField(t('settings.cliffFloor'), t('settings.cliffFloorDesc'), 'cliffFloor', 0, 0.5)}
+          </div>
 
           <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 12 }}>
             <label style={{ fontWeight: 600, display: 'block', marginBottom: 8 }}>🔄 {t('settings.queryExpansion')}</label>
@@ -44,9 +53,12 @@ export default function GateSection({
       ) : (
         <table>
           <tbody>
-            {displayRow(`💉 ${t('settings.injectionBudget')}`, `${config.gate?.maxInjectionTokens} tokens`, t('settings.injectionBudgetDesc'))}
+            {displayRow(`📌 ${t('settings.fixedBudget')}`, `${config.gate?.fixedInjectionTokens ?? 500} tokens`, t('settings.fixedBudgetDesc'))}
+            {displayRow(`💉 ${t('settings.memoryBudget')}`, `${config.gate?.maxInjectionTokens ?? 1000} tokens`, t('settings.memoryBudgetDesc'))}
+            {displayRow(`🔗 ${t('settings.relationBudget')}`, `${config.gate?.relationBudget ?? 100} tokens`, t('settings.relationBudgetDesc'))}
             {displayRow(`🔍 ${t('settings.searchCandidates')}`, config.gate?.searchLimit ?? 30, t('settings.searchCandidatesDesc'))}
             {displayRow(t('settings.skipSmallTalk'), config.gate?.skipSmallTalk ? t('common.on') : t('common.off'), t('settings.skipSmallTalkDesc'))}
+            {displayRow(`✂️ ${t('settings.cliffFilter')}`, `${t('settings.cliffAbsolute')}: ${config.gate?.cliffAbsolute ?? 0.4} · ${t('settings.cliffGap')}: ${config.gate?.cliffGap ?? 0.6} · ${t('settings.cliffFloor')}: ${config.gate?.cliffFloor ?? 0.05}`)}
             {displayRow(`🔄 ${t('settings.queryExpansion')}`, config.gate?.queryExpansion?.enabled ? `${t('common.on')} (${config.gate.queryExpansion.maxVariants} variants)` : t('common.off'), t('settings.queryExpansionDesc'))}
           </tbody>
         </table>

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, randomBytes } from 'node:crypto';
 import { createLogger } from '../utils/logger.js';
+import { updateConfig } from '../utils/config.js';
 
 const log = createLogger('security');
 
@@ -8,6 +9,11 @@ const log = createLogger('security');
 function safeCompare(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+/** Check if the active token comes from env var (immutable from Dashboard) */
+function isTokenFromEnv(): boolean {
+  return !!process.env.CORTEX_AUTH_TOKEN;
 }
 
 // ============ Auth Types ============
@@ -36,6 +42,86 @@ export function registerAuthRoutes(app: FastifyInstance, authConfig: AuthConfig)
   // Public: check if auth is enabled (no token required)
   app.get('/api/v1/auth/check', async () => {
     return { authRequired: hasAuth };
+  });
+
+  // Public: auth status — source, setupRequired, etc.
+  app.get('/api/v1/auth/status', async () => {
+    const hasToken = !!authConfig.token;
+    const hasAgents = !!(authConfig.agents && authConfig.agents.length > 0);
+    const fromEnv = isTokenFromEnv();
+
+    let source: 'env' | 'config' | 'none' = 'none';
+    if (hasToken) {
+      source = fromEnv ? 'env' : 'config';
+    }
+
+    return {
+      authRequired: hasToken || hasAgents,
+      setupRequired: !hasToken && !hasAgents,
+      source,
+      hasAgentTokens: hasAgents,
+      agentTokenCount: authConfig.agents?.length ?? 0,
+      mutable: !fromEnv,  // Can Dashboard change the token?
+    };
+  });
+
+  // Public: first-time token setup (only works when no token is set)
+  app.post('/api/v1/auth/setup', async (req, reply) => {
+    if (authConfig.token) {
+      reply.code(409).send({ error: 'Token already configured. Use /api/v1/auth/change-token instead.' });
+      return;
+    }
+
+    const body = req.body as any;
+    const newToken = body?.token;
+    if (!newToken || typeof newToken !== 'string' || newToken.length < 8) {
+      reply.code(400).send({ error: 'Token must be at least 8 characters.' });
+      return;
+    }
+
+    // Persist to config file
+    authConfig.token = newToken;
+    updateConfig({ auth: { token: newToken, agents: authConfig.agents } });
+    log.info('Master token configured via setup');
+
+    return { ok: true, message: 'Token configured. Please refresh and log in.' };
+  });
+
+  // Authenticated: change existing master token
+  app.post('/api/v1/auth/change-token', async (req, reply) => {
+    if (isTokenFromEnv()) {
+      reply.code(403).send({
+        error: 'Token is set via environment variable (CORTEX_AUTH_TOKEN). Change it there and restart.',
+      });
+      return;
+    }
+
+    const body = req.body as any;
+    const oldToken = body?.oldToken;
+    const newToken = body?.newToken;
+
+    if (!oldToken || !newToken) {
+      reply.code(400).send({ error: 'Both oldToken and newToken are required.' });
+      return;
+    }
+
+    if (typeof newToken !== 'string' || newToken.length < 8) {
+      reply.code(400).send({ error: 'New token must be at least 8 characters.' });
+      return;
+    }
+
+    // Verify old token
+    if (!authConfig.token || !safeCompare(oldToken, authConfig.token)) {
+      reply.code(403).send({ error: 'Current token is incorrect.' });
+      return;
+    }
+
+    // Update
+    authConfig.token = newToken;
+    updateConfig({ auth: { token: newToken, agents: authConfig.agents } });
+    log.info('Master token changed via Dashboard');
+
+    return { ok: true, message: 'Token changed. Please log in with the new token.' };
   });
 
   // Public: verify a token
@@ -99,6 +185,7 @@ export function registerAuthMiddleware(app: FastifyInstance, authConfig: AuthCon
   app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
     // Skip health check and auth routes (public)
     if (req.url === '/api/v1/health') return;
+    if (req.url === '/api/v1/metrics') return;
     if (req.url.startsWith('/api/v1/auth/')) return;
     // Skip non-API routes (dashboard static files)
     if (!req.url.startsWith('/api/') && !req.url.startsWith('/mcp/')) return;

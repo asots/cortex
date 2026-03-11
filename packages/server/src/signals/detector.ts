@@ -73,6 +73,10 @@ const HIGH_SIGNAL_PATTERNS: {
       /搞错了/,
       /更正[：:]/,
       /纠正[：:]/,
+      /^不对[，,\s]/,
+      /说错了/,
+      /错了[，,]?\s*(应该|其实|是)/,
+      /不是这样/,
       /actually[, ]/i,
       /correction[: ]/i,
       /not (.+), (?:but |it's )/i,
@@ -253,11 +257,12 @@ const HIGH_SIGNAL_PATTERNS: {
       // Chinese — require constraint context to avoid false positives like "我不能吃辣"
       /禁止.{1,30}/,
       /绝对不[要能可]/,
-      /(不得|不许|不允许|不可以).{1,40}/,
+      /(?<!怪|难|舍|巴|了|恨|免)不得(?!了|已|而知|不).{1,40}/,
+      /(不许|不允许|不可以).{1,40}/,
       /(永远|任何时候|无论如何)都?不[要能可以]/,
       // English
       /must not/i,
-      /never .{1,30}(do|allow|execute|run|use)/i,
+      /never .{0,30}(do|allow|execute|run|use)/i,
       /forbidden/i,
       /prohibited/i,
       /do not .{1,30} under any circumstances/i,
@@ -320,6 +325,12 @@ export function detectHighSignals(exchange: { user: string; assistant: string })
         const idx = match.index || 0;
         const context = extractSentenceContext(text, idx, match[0].length);
 
+        // Skip constraint/policy signals that are too short to be meaningful rules
+        // 4 chars allows valid Chinese constraints like "禁止删除", "不得修改"
+        if ((rule.category === 'constraint' || rule.category === 'policy') && context.length < 4) {
+          continue;
+        }
+
         signals.push({
           category: rule.category,
           content: context,
@@ -341,8 +352,10 @@ export function detectHighSignals(exchange: { user: string; assistant: string })
 export function isSmallTalk(message: string): boolean {
   const trimmed = message.trim();
 
-  // Very short messages
-  if (trimmed.length < 5) return true;
+  // Very short messages (but CJK characters carry more meaning per char)
+  const hasCJK = /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/.test(trimmed);
+  const minLength = hasCJK ? 2 : 5;
+  if (trimmed.length < minLength) return true;
 
   const smallTalkPatterns = [
     /^(hi|hello|hey|yo|sup|嗨|你好|哈喽|おはよう|こんにちは)[\s!！。.]*$/i,

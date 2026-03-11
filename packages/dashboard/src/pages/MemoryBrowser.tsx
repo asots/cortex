@@ -49,6 +49,8 @@ export default function MemoryBrowser() {
   const [bulkCategory, setBulkCategory] = useState('fact');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [newMem, setNewMem] = useState({ layer: 'core', category: 'fact', content: '', importance: 0.5 });
+  const [scoreMap, setScoreMap] = useState<Record<string, number>>({});
+  const [searchLimit, setSearchLimit] = useState(50);
   const limit = 20;
   const { t } = useI18n();
 
@@ -61,19 +63,27 @@ export default function MemoryBrowser() {
 
   const load = useCallback(() => {
     if (isSearchMode && searchQuery.trim()) {
-      search({ query: searchQuery, limit: 50, debug: false }).then((r: any) => {
-        let results = (r.results || []) as Memory[];
+      search({ query: searchQuery, limit: searchLimit, debug: false, agent_id: agentFilter || undefined }).then((r: any) => {
+        let results = (r.results || []) as any[];
+        // Build score map
+        const scores: Record<string, number> = {};
+        for (const m of results) scores[m.id] = m.finalScore ?? 0;
+        setScoreMap(scores);
         // Apply client-side filters
         if (layer) results = results.filter(m => m.layer === layer);
         if (category) results = results.filter(m => m.category === category);
         if (agentFilter) results = results.filter(m => m.agent_id === agentFilter);
-        // Sort
-        results.sort((a: any, b: any) => {
-          const va = a[sortField] ?? 0;
-          const vb = b[sortField] ?? 0;
-          if (typeof va === 'string') return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
-          return sortDir === 'asc' ? va - vb : vb - va;
-        });
+        // Default sort by score (desc) in search mode, unless user picked a different sort
+        if (sortField === 'created_at' && sortDir === 'desc') {
+          results.sort((a: any, b: any) => (b.finalScore ?? 0) - (a.finalScore ?? 0));
+        } else {
+          results.sort((a: any, b: any) => {
+            const va = a[sortField] ?? 0;
+            const vb = b[sortField] ?? 0;
+            if (typeof va === 'string') return sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+            return sortDir === 'asc' ? va - vb : vb - va;
+          });
+        }
         setMemories(results.slice(page * limit, (page + 1) * limit));
         setTotal(results.length);
       });
@@ -102,6 +112,7 @@ export default function MemoryBrowser() {
         setTotal(r.total);
       });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer, category, agentFilter, versionFilter, page, searchQuery, isSearchMode, sortField, sortDir]);
 
   useEffect(() => { load(); }, [load]);
@@ -119,6 +130,7 @@ export default function MemoryBrowser() {
   const clearSearch = () => {
     setSearchQuery('');
     setIsSearchMode(false);
+    setScoreMap({});
     setPage(0);
   };
 
@@ -319,8 +331,21 @@ export default function MemoryBrowser() {
             </button>
           ))}
         </div>
-        <span style={{ color: 'var(--text-muted)', fontSize: 13, marginLeft: 'auto' }}>
+        <span style={{ color: 'var(--text-muted)', fontSize: 13, marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
           {isSearchMode && t('memories.searchPrefix')}{t('common.total', { count: total })}
+          {isSearchMode && (
+            <>
+              <span style={{ color: 'var(--text-muted)' }}>/</span>
+              <input
+                type="number"
+                value={searchLimit}
+                onChange={e => setSearchLimit(Math.max(1, Math.min(200, parseInt(e.target.value) || 50)))}
+                style={{ width: 52, padding: '2px 4px', fontSize: 12, textAlign: 'center' }}
+                min={1} max={200}
+                title={t('memories.searchLimitTip') || 'Max results'}
+              />
+            </>
+          )}
         </span>
       </div>
 
@@ -369,6 +394,13 @@ export default function MemoryBrowser() {
                 <span className={`badge ${m.layer}`}>{m.layer}</span>
                 <span className="badge" style={{ background: 'rgba(59,130,246,0.2)', color: '#60a5fa' }}>{m.category}</span>
                 {m.is_pinned ? <span className="badge" style={{ background: 'rgba(255,170,0,0.2)', color: '#b8860b' }}>{t('memoryDetail.pinned')}</span> : null}
+                {isSearchMode && scoreMap[m.id] !== undefined && (
+                  <span className="badge" style={{
+                    background: scoreMap[m.id]! > 0.3 ? 'rgba(34,197,94,0.2)' : scoreMap[m.id]! > 0.1 ? 'rgba(234,179,8,0.2)' : 'rgba(156,163,175,0.2)',
+                    color: scoreMap[m.id]! > 0.3 ? '#22c55e' : scoreMap[m.id]! > 0.1 ? '#eab308' : '#9ca3af',
+                    fontFamily: 'monospace',
+                  }}>{scoreMap[m.id]!.toFixed(3)}</span>
+                )}
                 <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>{toLocal(m.created_at, 'short')}</span>
               </div>
               <div className="content">{m.content}</div>

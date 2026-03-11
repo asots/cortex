@@ -20,14 +20,20 @@ export class CachedEmbeddingProvider implements EmbeddingProvider {
     this.maxSize = maxSize;
   }
 
+  private normalizeKey(text: string): string {
+    return text.trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
   private hashKey(text: string): string {
+    // Normalize before hashing to improve cache hit rate
+    const normalized = this.normalizeKey(text);
     // Simple FNV-1a hash for fast key generation
     let hash = 0x811c9dc5;
-    for (let i = 0; i < text.length; i++) {
-      hash ^= text.charCodeAt(i);
+    for (let i = 0; i < normalized.length; i++) {
+      hash ^= normalized.charCodeAt(i);
       hash = (hash * 0x01000193) >>> 0;
     }
-    return hash.toString(36) + ':' + text.length;
+    return hash.toString(36) + ':' + normalized.length;
   }
 
   private evictIfNeeded(): void {

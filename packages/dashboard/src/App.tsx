@@ -104,6 +104,130 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
   );
 }
 
+// ============ Token Setup Page (first-time) ============
+
+function SetupPage({ onSetup }: { onSetup: () => void }) {
+  const [token, setToken] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const { t } = useI18n();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token.trim()) return;
+    if (token !== confirm) {
+      setError(t('setup.mismatch'));
+      return;
+    }
+    if (token.length < 8) {
+      setError(t('setup.tooShort'));
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch('/api/v1/auth/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: token.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setStoredToken(token.trim());
+        onSetup();
+      } else {
+        setError(data.error || 'Setup failed');
+      }
+    } catch {
+      setError(t('login.networkError'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      minHeight: '100vh', background: 'var(--bg)',
+    }}>
+      <div style={{
+        background: 'var(--bg-card)', border: '1px solid var(--border)',
+        borderRadius: 'var(--radius)', padding: 32, width: 400,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+      }}>
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <div style={{ fontSize: 36, marginBottom: 8 }}>🔐</div>
+          <h1 style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', margin: 0 }}>
+            {t('setup.title')}
+          </h1>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.6 }}>
+            {t('setup.subtitle')}
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)', display: 'block', marginBottom: 6 }}>
+            {t('setup.tokenLabel')}
+          </label>
+          <input
+            type="password"
+            value={token}
+            onChange={e => setToken(e.target.value)}
+            placeholder={t('setup.tokenPlaceholder')}
+            style={{
+              width: '100%', padding: '10px 12px', fontSize: 14,
+              boxSizing: 'border-box', marginBottom: 12,
+            }}
+            autoFocus
+          />
+
+          <label style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)', display: 'block', marginBottom: 6 }}>
+            {t('setup.confirmLabel')}
+          </label>
+          <input
+            type="password"
+            value={confirm}
+            onChange={e => setConfirm(e.target.value)}
+            placeholder={t('setup.confirmPlaceholder')}
+            style={{
+              width: '100%', padding: '10px 12px', fontSize: 14,
+              boxSizing: 'border-box', marginBottom: 12,
+            }}
+          />
+
+          {error && (
+            <div style={{
+              fontSize: 13, color: 'var(--danger)', marginBottom: 12,
+              padding: '8px 10px', background: 'rgba(239,68,68,0.1)',
+              borderRadius: 'var(--radius)',
+            }}>
+              {error}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading || !token.trim() || !confirm.trim()}
+            style={{
+              width: '100%', padding: '10px 0', fontSize: 14, fontWeight: 600,
+              background: 'var(--primary)', color: '#fff', border: 'none',
+              borderRadius: 'var(--radius)', cursor: loading ? 'wait' : 'pointer',
+              opacity: loading || !token.trim() || !confirm.trim() ? 0.6 : 1,
+            }}
+          >
+            {loading ? t('setup.saving') : t('setup.submit')}
+          </button>
+        </form>
+
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 16, lineHeight: 1.5, textAlign: 'center' }}>
+          {t('setup.hint')}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ============ Global Search ============
 
 function GlobalSearch() {
@@ -192,7 +316,7 @@ function GlobalSearch() {
             {results.length > 0 && (
               <div
                 style={{ padding: '8px 12px', textAlign: 'center', fontSize: 12, color: 'var(--primary)', cursor: 'pointer' }}
-                onClick={() => { setOpen(false); navigate('/search'); }}
+                onClick={() => { setOpen(false); navigate('/memories'); }}
                 onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
                 onMouseLeave={e => (e.currentTarget.style.background = '')}
               >
@@ -211,7 +335,7 @@ function GlobalSearch() {
 function AppContent() {
   const { t, locale, setLocale } = useI18n();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [authState, setAuthState] = useState<'checking' | 'login' | 'authenticated'>('checking');
+  const [authState, setAuthState] = useState<'checking' | 'setup' | 'login' | 'authenticated'>('checking');
   const [versionInfo, setVersionInfo] = useState<{
     version: string; github: string;
     latestRelease?: { version: string; url: string; publishedAt: string; updateAvailable: boolean } | null;
@@ -223,9 +347,13 @@ function AppContent() {
   const [checkMsg, setCheckMsg] = useState<string|null>(null);
 
   useEffect(() => {
-    // Check if auth is required
-    checkAuth().then(async ({ authRequired }) => {
-      if (!authRequired) {
+    // Check auth status (new endpoint with setup detection)
+    fetch('/api/v1/auth/status').then(r => r.json()).then(async (status: any) => {
+      if (status.setupRequired) {
+        setAuthState('setup');
+        return;
+      }
+      if (!status.authRequired) {
         setAuthState('authenticated');
         return;
       }
@@ -280,6 +408,10 @@ function AppContent() {
         {t('common.loading')}
       </div>
     );
+  }
+
+  if (authState === 'setup') {
+    return <SetupPage onSetup={() => setAuthState('authenticated')} />;
   }
 
   if (authState === 'login') {
@@ -461,14 +593,11 @@ function AppContent() {
             )}
           </div>
         )}
-        <div style={{ padding: '8px 12px' }}>
-          <GlobalSearch />
-        </div>
         <nav onClick={() => setSidebarOpen(false)}>
           <NavLink to="/" end className={({ isActive }) => isActive ? 'active' : ''}>📊 {t('nav.dashboard')}</NavLink>
           <NavLink to="/memories" className={({ isActive }) => isActive ? 'active' : ''}>🗂️ {t('nav.memories')}</NavLink>
           <NavLink to="/agents" className={({ isActive }) => isActive ? 'active' : ''}>🤖 {t('nav.agents')}</NavLink>
-          <NavLink to="/search" className={({ isActive }) => isActive ? 'active' : ''}>🔍 {t('nav.search')}</NavLink>
+
           <NavLink to="/relations" className={({ isActive }) => isActive ? 'active' : ''}>🕸️ {t('nav.relations')}</NavLink>
           <div className="nav-divider" />
           <div className="nav-group-label">{locale === 'zh' ? '日志' : 'Logs'}</div>
@@ -500,7 +629,7 @@ function AppContent() {
           <Route path="/memories" element={<MemoryBrowser />} />
           <Route path="/agents" element={<Agents />} />
           <Route path="/agents/:id" element={<AgentDetail />} />
-          <Route path="/search" element={<SearchDebug />} />
+          {/* SearchDebug removed — use MemoryBrowser search or Stats recall test */}
           <Route path="/relations" element={<RelationGraph />} />
           <Route path="/extraction-logs" element={<ExtractionLogs />} />
           <Route path="/system-logs" element={<SystemLogs />} />

@@ -132,7 +132,7 @@ const migrations = [
         category,
         content=memories,
         content_rowid=rowid,
-        tokenize='trigram'
+        tokenize='unicode61'
       );
 
       -- FTS sync triggers
@@ -268,7 +268,7 @@ const migrations = [
         category,
         content=memories,
         content_rowid=rowid,
-        tokenize='trigram'
+        tokenize='unicode61'
       );
 
       -- Re-populate FTS from existing data
@@ -371,7 +371,7 @@ const migrations = [
         category,
         content=memories,
         content_rowid=rowid,
-        tokenize='trigram'
+        tokenize='unicode61'
       );
 
       -- Re-populate FTS from existing data
@@ -464,6 +464,32 @@ const migrations = [
   {
     name: '010_extraction_error_column',
     sql: `ALTER TABLE extraction_logs ADD COLUMN error TEXT;`,
+  },
+  {
+    name: '011_extraction_input_hash',
+    sql: `ALTER TABLE extraction_logs ADD COLUMN input_hash TEXT;`,
+  },
+  {
+    name: '012_fts_jieba',
+    sql: `
+      -- Switch to jieba-based FTS: application-layer tokenization + unicode61
+      -- jieba segments CJK text into words (天哥, 东京, 乌冬面, sing-box)
+      -- unicode61 handles the space-separated tokens + non-CJK text
+      -- Triggers removed: FTS sync now handled by application layer (tokenized writes)
+      DROP TRIGGER IF EXISTS memories_ai;
+      DROP TRIGGER IF EXISTS memories_ad;
+      DROP TRIGGER IF EXISTS memories_au;
+      DROP TABLE IF EXISTS memories_fts;
+
+      -- External content table: content managed by application, not auto-synced
+      CREATE VIRTUAL TABLE memories_fts USING fts5(
+        content,
+        category,
+        content=memories,
+        content_rowid=rowid,
+        tokenize='unicode61'
+      );
+    `,
   },
 ];
 

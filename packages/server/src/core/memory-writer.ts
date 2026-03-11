@@ -24,6 +24,23 @@ const log = createLogger('memory-writer');
 /** Legacy fallback threshold when smartUpdate is disabled */
 const LEGACY_DEDUP_THRESHOLD = 0.15;
 
+// Fix #6: Simple semaphore for smart update LLM concurrency control
+class Semaphore {
+  private queue: Array<() => void> = [];
+  private running = 0;
+  constructor(private max: number) {}
+  async acquire(): Promise<void> {
+    if (this.running < this.max) { this.running++; return; }
+    return new Promise<void>(resolve => this.queue.push(() => { this.running++; resolve(); }));
+  }
+  release(): void {
+    this.running--;
+    const next = this.queue.shift();
+    if (next) next();
+  }
+}
+const smartUpdateSemaphore = new Semaphore(2);
+
 export interface ExtractedMemory {
   content: string;
   category: MemoryCategory;
@@ -84,6 +101,8 @@ export class MemoryWriter {
    */
   async smartUpdateDecision(existing: Memory, newContent: string): Promise<SmartUpdateDecision> {
     const prompt = `EXISTING MEMORY:\n${existing.content}\n\nNEW MEMORY:\n${newContent}`;
+    // Fix #6: Concurrency control for smart update LLM calls
+    await smartUpdateSemaphore.acquire();
     try {
       const raw = await this.llm.complete(prompt, {
         maxTokens: 300,
@@ -95,6 +114,8 @@ export class MemoryWriter {
     } catch (e: any) {
       log.warn({ error: e.message }, 'Smart update LLM call failed, defaulting to replace');
       return { action: 'replace', reasoning: 'LLM call failed' };
+    } finally {
+      smartUpdateSemaphore.release();
     }
   }
 
@@ -284,8 +305,9 @@ export class MemoryWriter {
     forceLayer?: 'working' | 'core',
   ): Promise<ProcessResult> {
     // Gate: filter obvious noise before expensive operations
-    if (extraction.importance < 0.4) {
-      log.info({ content: extraction.content.slice(0, 50), importance: extraction.importance }, 'Below minimum threshold, skipping');
+    const minImportance = this.config.sieve.minImportance ?? 0.3;
+    if (extraction.importance < minImportance) {
+      log.debug({ content: extraction.content.slice(0, 50), importance: extraction.importance, threshold: minImportance }, 'Below minimum importance threshold, skipping');
       return { action: 'skipped' };
     }
     if (extraction.content.length < 8) {
@@ -396,9 +418,10 @@ export class MemoryWriter {
     if (extractions.length === 0) return [];
 
     // Gate: filter obvious noise before expensive operations
+    const minImportance = this.config.sieve.minImportance ?? 0.3;
     const gatedExtractions = extractions.filter((ext, i) => {
-      if (ext.importance < 0.4) {
-        log.info({ content: ext.content.slice(0, 50), importance: ext.importance }, 'Batch gate: below threshold');
+      if (ext.importance < minImportance) {
+        log.debug({ content: ext.content.slice(0, 50), importance: ext.importance, threshold: minImportance }, 'Batch gate: below threshold');
         return false;
       }
       if (ext.content.length < 8 || ext.content.length > 500) {
@@ -409,7 +432,7 @@ export class MemoryWriter {
     });
     // Build result array with skipped entries for gated items
     const gateResults: (ProcessResult | null)[] = extractions.map((ext) =>
-      (ext.importance < 0.4 || ext.content.length < 8 || ext.content.length > 500)
+      (ext.importance < minImportance || ext.content.length < 8 || ext.content.length > 500)
         ? { action: 'skipped' as const }
         : null,
     );

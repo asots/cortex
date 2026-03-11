@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getAgent, updateAgent, deleteAgent, getAgentConfig } from '../api/client.js';
+import { getAgent, updateAgent, deleteAgent, getAgentConfig, checkAuth } from '../api/client.js';
 import { useI18n } from '../i18n/index.js';
 
 function copyText(text: string) {
@@ -209,6 +209,11 @@ export default function AgentDetail() {
   // Config editing
   const [editingConfig, setEditingConfig] = useState(false);
   const [configDraft, setConfigDraft] = useState<any>({});
+  const [authEnabled, setAuthEnabled] = useState(false);
+
+  useEffect(() => {
+    checkAuth().then(({ authRequired }) => setAuthEnabled(authRequired));
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -483,6 +488,7 @@ export default function AgentDetail() {
   const renderIntegration = () => {
     const cortexUrl = window.location.origin;
     const agentId = id!;
+    const authHeaderLine = authEnabled ? `\n  -H "Authorization: Bearer YOUR_TOKEN" \\\\` : '';
 
     const subTabs: { key: IntegrationTabKey; label: string }[] = [
       { key: 'api', label: t('agentDetail.integrationApi') },
@@ -490,8 +496,25 @@ export default function AgentDetail() {
       { key: 'openclaw', label: t('agentDetail.integrationOpenclaw') },
     ];
 
+    const authNotice = (
+      authEnabled ? (
+        <div style={{ margin: '8px 0', padding: '10px 14px', background: 'var(--bg-hover)', borderRadius: 8, fontSize: 13, lineHeight: 1.6, border: '1px solid var(--border)' }}>
+          <span style={{ fontWeight: 600 }}>🔐 {t('agentDetail.tokenNoticeTitle')}</span>
+          <br />
+          {t('agentDetail.tokenNoticeDesc')}
+        </div>
+      ) : (
+        <div style={{ margin: '8px 0', padding: '10px 14px', background: 'var(--bg-hover)', borderRadius: 8, fontSize: 13, lineHeight: 1.6, border: '1px solid var(--border)' }}>
+          <span style={{ fontWeight: 600 }}>ℹ️ {t('agentDetail.noTokenNoticeTitle')}</span>
+          <br />
+          {t('agentDetail.noTokenNoticeDesc')}
+        </div>
+      )
+    );
+
     const renderApiTab = () => (
       <div>
+        {authNotice}
         <StepBlock
           step={1}
           title={t('agentDetail.apiStep1Title')}
@@ -502,34 +525,32 @@ export default function AgentDetail() {
           step={2}
           title={t('agentDetail.apiStep2Title')}
           description={t('agentDetail.apiStep2Desc')}
-          code={`curl -X POST ${cortexUrl}/api/v1/ingest \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer YOUR_TOKEN" \\\n  -d '{\n    "user_message": "...",\n    "assistant_message": "...",\n    "agent_id": "${agentId}"\n  }'`}
+          code={`curl -X POST ${cortexUrl}/api/v1/ingest \\\n  -H "Content-Type: application/json" \\${authHeaderLine}\n  -d '{\n    "user_message": "...",\n    "assistant_message": "...",\n    "agent_id": "${agentId}"\n  }'`}
         />
         <StepBlock
           step={3}
           title={t('agentDetail.apiStep3Title')}
           description={t('agentDetail.apiStep3Desc')}
-          code={`curl -X POST ${cortexUrl}/api/v1/recall \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer YOUR_TOKEN" \\\n  -d '{\n    "query": "What are the user preferences?",\n    "agent_id": "${agentId}"\n  }'`}
+          code={`curl -X POST ${cortexUrl}/api/v1/recall \\\n  -H "Content-Type: application/json" \\${authHeaderLine}\n  -d '{\n    "query": "What are the user preferences?",\n    "agent_id": "${agentId}"\n  }'`}
         />
         <StepBlock
           step={4}
           title={t('agentDetail.apiStep4Title')}
           description={t('agentDetail.apiStep4Desc')}
-          code={`curl -X POST ${cortexUrl}/api/v1/memories \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer YOUR_TOKEN" \\\n  -d '{\n    "layer": "core",\n    "category": "fact",\n    "content": "...",\n    "agent_id": "${agentId}",\n    "importance": 0.8\n  }'`}
+          code={`curl -X POST ${cortexUrl}/api/v1/memories \\\n  -H "Content-Type: application/json" \\${authHeaderLine}\n  -d '{\n    "layer": "core",\n    "category": "fact",\n    "content": "...",\n    "agent_id": "${agentId}",\n    "importance": 0.8\n  }'`}
         />
         <StepBlock
           step={5}
           title={t('agentDetail.apiStep5Title')}
           description={t('agentDetail.apiStep5Desc')}
           code={`const CORTEX_URL = '${cortexUrl}';
-const AGENT_ID = '${agentId}';
-const AUTH_TOKEN = 'YOUR_TOKEN';
+const AGENT_ID = '${agentId}';${authEnabled ? `\nconst AUTH_TOKEN = 'YOUR_TOKEN';` : ''}
 
 async function recall(query: string) {
   const res = await fetch(\`\${CORTEX_URL}/api/v1/recall\`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
-      'Authorization': \`Bearer \${AUTH_TOKEN}\`,
+      'Content-Type': 'application/json',${authEnabled ? `\n      'Authorization': \`Bearer \${AUTH_TOKEN}\`,` : ''}
     },
     body: JSON.stringify({ query, agent_id: AGENT_ID }),
   });
@@ -540,8 +561,7 @@ async function ingest(userMessage: string, assistantMessage: string) {
   const res = await fetch(\`\${CORTEX_URL}/api/v1/ingest\`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
-      'Authorization': \`Bearer \${AUTH_TOKEN}\`,
+      'Content-Type': 'application/json',${authEnabled ? `\n      'Authorization': \`Bearer \${AUTH_TOKEN}\`,` : ''}
     },
     body: JSON.stringify({
       user_message: userMessage,
@@ -559,11 +579,9 @@ async function ingest(userMessage: string, assistantMessage: string) {
           code={`import requests
 
 CORTEX_URL = "${cortexUrl}"
-AGENT_ID = "${agentId}"
-AUTH_TOKEN = "YOUR_TOKEN"
+AGENT_ID = "${agentId}"${authEnabled ? `\nAUTH_TOKEN = "YOUR_TOKEN"` : ''}
 HEADERS = {
-    "Content-Type": "application/json",
-    "Authorization": f"Bearer {AUTH_TOKEN}",
+    "Content-Type": "application/json",${authEnabled ? `\n    "Authorization": f"Bearer {AUTH_TOKEN}",` : ''}
 }
 
 def recall(query: str):
@@ -595,7 +613,10 @@ def ingest(user_msg: str, assistant_msg: str):
             cortex: {
               command: 'npx',
               args: ['@cortexmem/mcp', '--server-url', cortexUrl],
-              env: { CORTEX_AGENT_ID: agentId },
+              env: {
+                ...(authEnabled ? { CORTEX_AUTH_TOKEN: 'YOUR_TOKEN' } : {}),
+                CORTEX_AGENT_ID: agentId,
+              },
             },
           },
         }, null, 2),
@@ -607,14 +628,20 @@ def ingest(user_msg: str, assistant_msg: str):
             cortex: {
               command: 'npx',
               args: ['@cortexmem/mcp'],
-              env: { CORTEX_URL: cortexUrl, CORTEX_AGENT_ID: agentId },
+              env: {
+                CORTEX_URL: cortexUrl,
+                ...(authEnabled ? { CORTEX_AUTH_TOKEN: 'YOUR_TOKEN' } : {}),
+                CORTEX_AGENT_ID: agentId,
+              },
             },
           },
         }, null, 2),
         pasteDesc: t('agentDetail.mcpStep2CursorDesc'),
       },
       'claude-code': {
-        code: `claude mcp add cortex -- npx @cortexmem/mcp --server-url ${cortexUrl}\n# Set agent ID:\nclaude mcp add cortex -e CORTEX_AGENT_ID=${agentId} -- npx @cortexmem/mcp --server-url ${cortexUrl}`,
+        code: authEnabled
+          ? `claude mcp add cortex -e CORTEX_AUTH_TOKEN=YOUR_TOKEN -e CORTEX_AGENT_ID=${agentId} -- npx @cortexmem/mcp --server-url ${cortexUrl}`
+          : `claude mcp add cortex -e CORTEX_AGENT_ID=${agentId} -- npx @cortexmem/mcp --server-url ${cortexUrl}`,
         pasteDesc: t('agentDetail.mcpStep2ClaudeCodeDesc'),
       },
       'other': {
@@ -623,7 +650,10 @@ def ingest(user_msg: str, assistant_msg: str):
             cortex: {
               command: 'npx',
               args: ['@cortexmem/mcp', '--server-url', cortexUrl],
-              env: { CORTEX_AGENT_ID: agentId },
+              env: {
+                ...(authEnabled ? { CORTEX_AUTH_TOKEN: 'YOUR_TOKEN' } : {}),
+                CORTEX_AGENT_ID: agentId,
+              },
             },
           },
         }, null, 2),
@@ -663,6 +693,7 @@ def ingest(user_msg: str, assistant_msg: str):
             ))}
           </div>
         </StepBlock>
+        {authNotice}
         <StepBlock
           step={2}
           title={t('agentDetail.mcpStep2Title')}
@@ -708,6 +739,7 @@ def ingest(user_msg: str, assistant_msg: str):
 
     const renderOpenclawTab = () => (
       <div>
+        {authNotice}
         <StepBlock
           step={1}
           title={t('agentDetail.openclawStep1Title')}
@@ -728,8 +760,7 @@ def ingest(user_msg: str, assistant_msg: str):
     "cortex-bridge": {
       "enabled": true,
       "config": {
-        "cortexUrl": "${cortexUrl}",
-        "authToken": "YOUR_TOKEN",
+        "cortexUrl": "${cortexUrl}",${authEnabled ? `\n        "authToken": "YOUR_TOKEN",` : ''}
         "agentId": "${agentId}"
       }
     }
@@ -740,13 +771,13 @@ def ingest(user_msg: str, assistant_msg: str):
           <div style={{ padding: 14, background: 'var(--bg)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('agentDetail.openclawEnvMethod')}</div>
             <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 8px 0' }}>{t('agentDetail.openclawEnvMethodDesc')}</p>
-            <CodeSnippet title=".env" code={`CORTEX_URL=${cortexUrl}\nCORTEX_AUTH_TOKEN=YOUR_TOKEN\nCORTEX_AGENT_ID=${agentId}`} />
+            <CodeSnippet title=".env" code={`CORTEX_URL=${cortexUrl}${authEnabled ? `\nCORTEX_AUTH_TOKEN=YOUR_TOKEN` : ''}\nCORTEX_AGENT_ID=${agentId}`} />
           </div>
           {/* Method C: shell profile */}
           <div style={{ marginTop: 16, padding: 14, background: 'var(--bg)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('agentDetail.openclawShellMethod')}</div>
             <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 8px 0' }}>{t('agentDetail.openclawShellMethodDesc')}</p>
-            <CodeSnippet title="~/.zshrc / ~/.bashrc" code={`echo 'export CORTEX_URL=${cortexUrl}' >> ~/.zshrc\necho 'export CORTEX_AUTH_TOKEN=YOUR_TOKEN' >> ~/.zshrc\necho 'export CORTEX_AGENT_ID=${agentId}' >> ~/.zshrc`} />
+            <CodeSnippet title="~/.zshrc / ~/.bashrc" code={`echo 'export CORTEX_URL=${cortexUrl}' >> ~/.zshrc${authEnabled ? `\necho 'export CORTEX_AUTH_TOKEN=YOUR_TOKEN' >> ~/.zshrc` : ''}\necho 'export CORTEX_AGENT_ID=${agentId}' >> ~/.zshrc`} />
           </div>
         </StepBlock>
         <StepBlock

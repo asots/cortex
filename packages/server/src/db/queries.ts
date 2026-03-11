@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { getDb } from './connection.js';
 import { generateId, normalizeEntity, escapeLikePattern } from '../utils/helpers.js';
+import { tokenize, tokenizeQuery } from '../utils/tokenizer.js';
 
 // ============ Memory Types ============
 
@@ -102,7 +103,43 @@ export function insertMemory(mem: Partial<Memory> & { layer: MemoryLayer; catego
     now,
   );
 
+  // Sync FTS index (jieba-tokenized)
+  syncFtsInsert(db, id, mem.content, mem.category);
+
   return getMemoryById(id)!;
+}
+
+// ============ FTS Sync (jieba tokenization) ============
+
+function syncFtsInsert(db: Database.Database, id: string, content: string, category: string): void {
+  // Get rowid from the inserted memory
+  const row = db.prepare('SELECT rowid FROM memories WHERE id = ?').get(id) as { rowid: number } | undefined;
+  if (!row) return;
+  db.prepare('INSERT INTO memories_fts(rowid, content, category) VALUES (?, ?, ?)').run(
+    row.rowid,
+    tokenize(content),
+    category,
+  );
+}
+
+function syncFtsDelete(db: Database.Database, rowid: number, oldContent: string, oldCategory: string): void {
+  db.prepare("INSERT INTO memories_fts(memories_fts, rowid, content, category) VALUES ('delete', ?, ?, ?)").run(
+    rowid,
+    tokenize(oldContent),
+    oldCategory,
+  );
+}
+
+function syncFtsUpdate(db: Database.Database, id: string, newContent: string, newCategory: string): void {
+  const row = db.prepare('SELECT rowid, content, category FROM memories WHERE id = ?').get(id) as any;
+  if (!row) return;
+  // Delete old entry, insert new
+  syncFtsDelete(db, row.rowid, row.content, row.category);
+  db.prepare('INSERT INTO memories_fts(rowid, content, category) VALUES (?, ?, ?)').run(
+    row.rowid,
+    tokenize(newContent),
+    newCategory,
+  );
 }
 
 export function getMemoryById(id: string): Memory | null {
@@ -127,7 +164,7 @@ export function listMemories(opts: {
 
   if (opts.layer) { conditions.push('layer = ?'); params.push(opts.layer); }
   if (opts.category) { conditions.push('category = ?'); params.push(opts.category); }
-  if (opts.agent_id) { conditions.push('agent_id = ?'); params.push(opts.agent_id); }
+  if (opts.agent_id) { conditions.push('(agent_id = ? OR agent_id IS NULL OR agent_id = \'\')'); params.push(opts.agent_id); }
   if (!opts.include_superseded) { conditions.push('superseded_by IS NULL'); }
   if (opts.has_versions) {
     // Memories that have been superseded OR that supersede others
@@ -162,16 +199,37 @@ export function updateMemory(id: string, updates: Partial<Pick<Memory, 'layer' |
 
   if (sets.length === 0) return getMemoryById(id);
 
+  // Snapshot old content/category for FTS sync
+  const old = db.prepare('SELECT rowid, content, category FROM memories WHERE id = ?').get(id) as any;
+
   sets.push('updated_at = ?');
   params.push(new Date().toISOString());
   params.push(id);
 
   db.prepare(`UPDATE memories SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+
+  // Sync FTS if content or category changed
+  if (old && (updates.content || updates.category)) {
+    syncFtsDelete(db, old.rowid, old.content, old.category);
+    const updated = db.prepare('SELECT content, category FROM memories WHERE id = ?').get(id) as any;
+    if (updated) {
+      db.prepare('INSERT INTO memories_fts(rowid, content, category) VALUES (?, ?, ?)').run(
+        old.rowid,
+        tokenize(updated.content),
+        updated.category,
+      );
+    }
+  }
+
   return getMemoryById(id);
 }
 
 export function deleteMemory(id: string): boolean {
   const db = getDb();
+
+  // Snapshot for FTS sync before delete
+  const old = db.prepare('SELECT rowid, content, category FROM memories WHERE id = ?').get(id) as any;
+
   // Clean up FK references before deleting the memory
   db.prepare('DELETE FROM access_log WHERE memory_id = ?').run(id);
   db.prepare('DELETE FROM relation_evidence WHERE memory_id = ?').run(id);
@@ -179,6 +237,12 @@ export function deleteMemory(id: string): boolean {
   // Clear superseded_by references pointing to this memory
   db.prepare('UPDATE memories SET superseded_by = NULL WHERE superseded_by = ?').run(id);
   const result = db.prepare('DELETE FROM memories WHERE id = ?').run(id);
+
+  // Sync FTS
+  if (old && result.changes > 0) {
+    syncFtsDelete(db, old.rowid, old.content, old.category);
+  }
+
   return result.changes > 0;
 }
 
@@ -230,7 +294,8 @@ function sanitizeFTSQuery(query: string): string {
 }
 
 export function searchFTS(query: string, opts?: { layer?: MemoryLayer; limit?: number; agent_id?: string }): (Memory & { rank: number })[] {
-  const sanitized = sanitizeFTSQuery(query);
+  // Tokenize query with jieba for CJK word matching
+  const sanitized = sanitizeFTSQuery(tokenizeQuery(query));
   if (!sanitized) return [];
 
   const db = getDb();
@@ -238,7 +303,8 @@ export function searchFTS(query: string, opts?: { layer?: MemoryLayer; limit?: n
   const params: any[] = [sanitized];
 
   if (opts?.layer) { conditions.push('m.layer = ?'); params.push(opts.layer); }
-  if (opts?.agent_id) { conditions.push('m.agent_id = ?'); params.push(opts.agent_id); }
+  // agent_id filter: null/empty agent_id memories are shared (match any agent)
+  if (opts?.agent_id) { conditions.push('(m.agent_id = ? OR m.agent_id IS NULL OR m.agent_id = \'\')'); params.push(opts.agent_id); }
 
   conditions.push('(m.expires_at IS NULL OR m.expires_at > datetime(\'now\'))');
   conditions.push('m.superseded_by IS NULL');

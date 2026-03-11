@@ -12,6 +12,8 @@ import { CortexApp } from './app.js';
 import { registerAllRoutes } from './api/router.js';
 import { registerAuthRoutes, registerAuthMiddleware, registerAgentEnforcement, registerRateLimiting, registerInputLimits } from './api/security.js';
 import { startLifecycleScheduler, stopLifecycleScheduler } from './core/scheduler.js';
+import { ensureLoaded as ensureTokenizerLoaded } from './utils/tokenizer.js';
+import { rebuildFtsIndex } from './db/fts-rebuild.js';
 
 const log = createLogger('server');
 
@@ -20,8 +22,15 @@ async function main() {
   const config = loadConfig();
   log.info({ port: config.port, host: config.host }, 'Starting Cortex server');
 
+  // 1b. Initialize jieba tokenizer (loads WASM + dict)
+  await ensureTokenizerLoaded();
+  log.info('Jieba tokenizer loaded');
+
   // 2. Initialize databases
   initDatabase(config.storage.dbPath);
+
+  // 2a. Rebuild FTS index with jieba tokenization (idempotent)
+  rebuildFtsIndex();
 
   // 2b. Initialize Neo4j (optional — graph features)
   const neo4jDriver = initNeo4j();

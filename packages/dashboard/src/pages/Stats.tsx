@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { getStats, getHealth, getComponentHealth, listMemories, testConnections, testRecall } from '../api/client.js';
+import { getStats, getHealth, getComponentHealth, listMemories, testConnections, recall as recallApi, listAgents } from '../api/client.js';
 import { useI18n } from '../i18n/index.js';
 
 function fmtNum(n: number): string {
@@ -197,8 +197,12 @@ export default function Stats() {
   const [connTest, setConnTest] = useState<any>(null);
   const [testing, setTesting] = useState(false);
   const [recallQuery, setRecallQuery] = useState('');
-  const [recallResults, setRecallResults] = useState<any[]|null>(null);
+  const [recallResults, setRecallResults] = useState<any>(null);
   const [recalling, setRecalling] = useState(false);
+  const [recallAgent, setRecallAgent] = useState('');
+  const [relationsExpanded, setRelationsExpanded] = useState(false);
+  const [fixedExpanded, setFixedExpanded] = useState(false);
+  const [agents, setAgents] = useState<any[]>([]);
   const { t } = useI18n();
 
   useEffect(() => {
@@ -208,6 +212,14 @@ export default function Stats() {
 
     getComponentHealth()
       .then((r: any) => setComponents(r.components || []))
+      .catch(() => {});
+
+    listAgents()
+      .then((r: any) => {
+        const list = r.agents || [];
+        setAgents(list);
+        if (list.length > 0 && !recallAgent) setRecallAgent(list[0].id);
+      })
       .catch(() => {});
 
     // Load sample memories for distribution histograms
@@ -403,7 +415,16 @@ export default function Stats() {
       {/* Recall Tester */}
       <div className="card">
         <h3 style={{ marginBottom: 12 }}>🔍 {t('stats.recallTester')}</h3>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+          <select
+            value={recallAgent}
+            onChange={e => setRecallAgent(e.target.value)}
+            style={{ fontSize: 13, padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', width: 'auto', maxWidth: 140, flexShrink: 0 }}
+          >
+            {agents.map((a: any) => (
+              <option key={a.id} value={a.id}>{a.name || a.id}</option>
+            ))}
+          </select>
           <input
             type="text"
             value={recallQuery}
@@ -411,7 +432,9 @@ export default function Stats() {
             onKeyDown={e => {
               if (e.key === 'Enter' && recallQuery.trim()) {
                 setRecalling(true);
-                testRecall(recallQuery).then(r => { setRecallResults(r.memories || r.results || r); setRecalling(false); }).catch(() => setRecalling(false));
+                recallApi({ query: recallQuery, agent_id: recallAgent || undefined, skip_filters: true })
+                  .then((r: any) => { setRecallResults(r); setRecalling(false); })
+                  .catch(() => { setRecallResults({ memories: [], meta: {} }); setRecalling(false); });
               }
             }}
             placeholder={t('stats.recallPlaceholder')}
@@ -421,34 +444,120 @@ export default function Stats() {
             disabled={recalling || !recallQuery.trim()}
             onClick={async () => {
               setRecalling(true);
-              try { const r = await testRecall(recallQuery); setRecallResults(r.memories || r.results || r); } catch { setRecallResults([]); }
+              try {
+                const r = await recallApi({ query: recallQuery, agent_id: recallAgent || undefined, skip_filters: true });
+                setRecallResults(r);
+              } catch { setRecallResults({ memories: [], meta: {} }); }
               setRecalling(false);
             }}
-            style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, cursor: 'pointer', background: 'var(--primary)', color: '#fff', border: 'none' }}
+            style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, cursor: 'pointer', background: 'var(--primary)', color: '#fff', border: 'none', flexShrink: 0 }}
           >
-            {recalling ? '...' : '搜索'}
+            {recalling ? '...' : t('common.search')}
           </button>
         </div>
-        {recallResults !== null && (
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
-              返回 {recallResults.length} 条结果
-            </div>
-            {recallResults.map((m: any, i: number) => (
-              <div key={m.id || i} style={{ padding: '8px 12px', marginBottom: 4, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span style={{ fontWeight: 600 }}>{m.category}</span>
-                  <span style={{ color: 'var(--text-muted)' }}>
-                    {m.distance != null ? `距离 ${Number(m.distance).toFixed(3)}` : ''}
-                    {m.importance != null ? ` · 重要度 ${m.importance}` : ''}
-                    {m.layer ? ` · ${m.layer}` : ''}
+        {recallResults !== null && (() => {
+          const memories = recallResults.memories || [];
+          const meta = recallResults.meta || {};
+          const injected = meta.injected_count ?? memories.length;
+          const totalFound = meta.total_found ?? 0;
+          const latency = meta.latency_ms ?? 0;
+          // Parse fixed injection lines from context (persona lines before search results)
+          const contextStr = recallResults.context || '';
+          const contextLines = contextStr.split('\n').filter((l: string) => l.startsWith('['));
+          const memoryIds = new Set(memories.map((m: any) => m.id));
+          // Fixed lines are context lines whose content doesn't match any search result
+          const fixedLines: string[] = [];
+          for (const line of contextLines) {
+            const lineContent = line.replace(/^\[[^\]]*\]\s*/, '');
+            const isSearchResult = memories.some((m: any) => lineContent && m.content && m.content.startsWith(lineContent.slice(0, 30)));
+            if (!isSearchResult) fixedLines.push(line);
+          }
+          const fixedCount = fixedLines.length;
+          const searchCount = Math.max(0, injected - fixedCount);
+          const relationsMatch = contextStr.match(/<cortex_relations>([\s\S]*?)<\/cortex_relations>/);
+          const relationLines = relationsMatch
+            ? relationsMatch[1].split('\n').map((l: string) => l.trim()).filter((l: string) => l.length > 0)
+            : [];
+          return (
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <span>{t('stats.recallFound', { total: totalFound })}</span>
+                <span>💉 {fixedCount > 0
+                  ? t('stats.recallInjectedBreakdown', { search: searchCount, fixed: fixedCount })
+                  : t('stats.recallInjected', { count: injected })
+                }</span>
+                <span>⏱ {latency}ms</span>
+                {meta.relations_count ? (
+                  <span
+                    style={{ cursor: relationLines.length > 0 ? 'pointer' : 'default', userSelect: 'none' }}
+                    onClick={() => { if (relationLines.length > 0) setRelationsExpanded(!relationsExpanded); }}
+                    title={relationLines.length > 0 ? (relationsExpanded ? 'Click to collapse' : 'Click to expand') : ''}
+                  >
+                    🔗 {meta.relations_count} {t('stats.recallRelations')} {relationLines.length > 0 ? (relationsExpanded ? '▾' : '▸') : ''}
                   </span>
-                </div>
-                <div style={{ color: 'var(--text)', lineHeight: 1.4 }}>{m.content}</div>
+                ) : null}
               </div>
-            ))}
-          </div>
-        )}
+              {relationsExpanded && relationLines.length > 0 && (
+                <div style={{
+                  fontSize: 12, marginBottom: 8, padding: '8px 12px',
+                  background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6,
+                  maxHeight: 200, overflowY: 'auto',
+                }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--text-muted)' }}>
+                    {t('stats.recallRelationsTitle')}
+                  </div>
+                  {relationLines.map((line: string, i: number) => (
+                    <div key={i} style={{ color: 'var(--text)', lineHeight: 1.5, paddingLeft: 4 }}>{line}</div>
+                  ))}
+                </div>
+              )}
+              {fixedLines.length > 0 && (
+                <div
+                  style={{
+                    padding: '8px 12px', marginBottom: 4,
+                    background: 'var(--bg)', border: '1px solid var(--text-muted)',
+                    borderRadius: 6, fontSize: 12, borderStyle: 'dashed',
+                    cursor: 'pointer', userSelect: 'none',
+                  }}
+                  onClick={() => setFixedExpanded(!fixedExpanded)}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 700, marginRight: 6 }}>#0</span>
+                      <span style={{ fontWeight: 600 }}>{t('stats.recallFixed')}</span>
+                      <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>{fixedExpanded ? '▾' : '▸'}</span>
+                    </span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>{fixedCount} {t('stats.recallFixedCount')}</span>
+                  </div>
+                  {fixedExpanded && fixedLines.map((line: string, i: number) => (
+                    <div key={i} style={{ color: 'var(--text)', lineHeight: 1.5, marginTop: i === 0 ? 4 : 0 }}>{line}</div>
+                  ))}
+                </div>
+              )}
+              {memories.map((m: any, i: number) => (
+                <div key={m.id || i} style={{
+                  padding: '8px 12px', marginBottom: 4,
+                  background: 'var(--bg)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6, fontSize: 12,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, flexWrap: 'wrap', gap: 4 }}>
+                    <span>
+                      <span style={{ color: 'var(--primary)', fontWeight: 700, marginRight: 6 }}>#{i + 1}</span>
+                      <span style={{ fontWeight: 600 }}>{m.category}</span>
+                    </span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                      {m.finalScore != null ? `score ${Number(m.finalScore).toFixed(3)}` : ''}
+                      {m.importance != null ? ` · imp ${m.importance}` : ''}
+                      {m.layer ? ` · ${m.layer}` : ''}
+                    </span>
+                  </div>
+                  <div style={{ color: 'var(--text)', lineHeight: 1.4 }}>{m.content}</div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

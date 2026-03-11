@@ -622,6 +622,20 @@ export default {
     // AgentMessage.content is multimodal: string | {type,text}[]
     const contextMessageCount = Number(config.contextMessages) || 4;
 
+    // Fix #2: Patterns to skip (heartbeats, no-reply, etc.)
+    const SKIP_RESPONSE_RE = /^(HEARTBEAT_OK|NO_REPLY|HEARTBEAT_ACKNOWLEDGED)\s*$/i;
+    const HEARTBEAT_PROMPT_RE = /HEARTBEAT(?:\.md|_OK)/i;
+
+    // Fix #5: Content-level dedup to avoid repeated ingestion of same content
+    let lastIngestHash = '';
+    function simpleHash(str: string): string {
+      let h = 0;
+      for (let i = 0; i < str.length; i++) {
+        h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+      }
+      return String(h);
+    }
+
     api.on('agent_end', async (event: any) => {
       try {
         const allMessages: any[] = event?.messages || [];
@@ -631,9 +645,48 @@ export default {
           (m: any) => m.role === 'user' || m.role === 'assistant',
         );
 
-        // Take the last N messages
-        const recentMsgs = conversationMsgs.slice(-contextMessageCount);
-        if (recentMsgs.length === 0) return;
+        // Fix #2: Skip heartbeat/no-reply turns before any processing
+        const lastRawAssistant = [...conversationMsgs].reverse().find((m: any) => m.role === 'assistant');
+        if (lastRawAssistant) {
+          const rawText = extractText(lastRawAssistant.content).trim();
+          if (SKIP_RESPONSE_RE.test(rawText)) {
+            if (debug) log.info('[cortex-bridge] agent_end: skipping heartbeat/no-reply turn');
+            return;
+          }
+        }
+        const lastRawUser = [...conversationMsgs].reverse().find((m: any) => m.role === 'user');
+        if (lastRawUser) {
+          const rawUserText = extractText(lastRawUser.content).trim();
+          if (HEARTBEAT_PROMPT_RE.test(rawUserText) && rawUserText.length < 500) {
+            if (debug) log.info('[cortex-bridge] agent_end: skipping heartbeat prompt turn');
+            return;
+          }
+        }
+
+        // Fix #5: Group messages into conversation turns (user + assistant pairs)
+        // contextMessageCount=4 → take last 2 turns (2 user + 2 assistant messages)
+        const turnsToTake = Math.max(1, Math.floor(contextMessageCount / 2));
+        const turns: Array<{ user: any; assistant: any }> = [];
+        for (let i = conversationMsgs.length - 1; i >= 0 && turns.length < turnsToTake; i--) {
+          const msg = conversationMsgs[i];
+          if (msg.role === 'assistant') {
+            // Look backward for the preceding user message
+            const userIdx = conversationMsgs.slice(0, i).reverse().findIndex((m: any) => m.role === 'user');
+            if (userIdx >= 0) {
+              turns.unshift({ user: conversationMsgs[i - 1 - userIdx], assistant: msg });
+              i = i - userIdx; // skip past the user message we just paired
+            }
+          }
+        }
+
+        // Build cleaned messages from turns
+        const recentMsgs = turns.flatMap(t => [t.user, t.assistant]).filter(Boolean);
+        if (recentMsgs.length === 0) {
+          // Fallback to original slice behavior
+          const fallbackMsgs = conversationMsgs.slice(-contextMessageCount);
+          if (fallbackMsgs.length === 0) return;
+          recentMsgs.push(...fallbackMsgs);
+        }
 
         // Clean each message
         const cleanedMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
@@ -659,6 +712,14 @@ export default {
           if (debug) log.warn('[cortex-bridge] agent_end: missing user or assistant in last pair, skipping');
           return;
         }
+
+        // Fix #5: Content-level dedup — skip if same user+assistant pair
+        const currentHash = simpleHash(userText + '|||' + assistantText);
+        if (currentHash === lastIngestHash) {
+          if (debug) log.info('[cortex-bridge] agent_end: skipping duplicate ingest (same content hash)');
+          return;
+        }
+        lastIngestHash = currentHash;
 
         let result = await cortexIngest(cortexUrl, userText, assistantText, agentId, cleanedMessages, config);
         if (!result.ok) {

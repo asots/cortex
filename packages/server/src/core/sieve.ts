@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { createLogger } from '../utils/logger.js';
 import { metrics } from '../utils/metrics.js';
 import { upsertRelation as sqliteUpsertRelation, type Memory, type MemoryCategory } from '../db/index.js';
@@ -15,6 +16,24 @@ import { parseRelations } from './relation-utils.js';
 import { getCategoryFeedbackStats } from '../db/index.js';
 
 const log = createLogger('sieve');
+
+// ── Fix #1: Input-level dedup ──
+const INPUT_DEDUP_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
+const INPUT_DEDUP_CLEANUP_MS = 30 * 60 * 1000; // cleanup entries older than 30 minutes
+const recentIngestHashes = new Map<string, number>(); // hash → timestamp
+
+function computeInputHash(userMsg: string, assistantMsg: string, agentId: string): string {
+  return createHash('md5').update(`${agentId}|||${userMsg}|||${assistantMsg}`).digest('hex');
+}
+
+function cleanupIngestHashes(): void {
+  const now = Date.now();
+  for (const [hash, ts] of recentIngestHashes) {
+    if (now - ts > INPUT_DEDUP_CLEANUP_MS) {
+      recentIngestHashes.delete(hash);
+    }
+  }
+}
 
 // Re-export types for backward compatibility
 export type { ExtractedMemory, SimilarMemory, SmartUpdateDecision } from './memory-writer.js';
@@ -44,6 +63,7 @@ export interface ExtractionLogData {
   memories_smart_updated: number;
   latency_ms: number;
   error?: string;
+  input_hash?: string; // Fix #4
 }
 
 export interface IngestRequest {
@@ -77,6 +97,18 @@ export class MemorySieve {
 
   async ingest(req: IngestRequest): Promise<IngestResponse> {
     const agentId = req.agent_id || 'default';
+
+    // Fix #1: Input-level dedup — skip if same content was ingested within 10 minutes
+    const inputHash = computeInputHash(req.user_message, req.assistant_message, agentId);
+    const lastSeen = recentIngestHashes.get(inputHash);
+    if (lastSeen && Date.now() - lastSeen < INPUT_DEDUP_WINDOW_MS) {
+      log.info({ agent_id: agentId, hash: inputHash.slice(0, 8) }, 'Input-level dedup: skipping duplicate ingest within 10m window');
+      metrics.inc('input_dedup_skipped');
+      return { extracted: [], high_signals: [], structured_extractions: [], deduplicated: 0, smart_updated: 0, extraction_logs: [] };
+    }
+    recentIngestHashes.set(inputHash, Date.now());
+    // Periodic cleanup
+    if (recentIngestHashes.size > 100) cleanupIngestHashes();
 
     // Build multi-turn messages if provided
     let cleanMessages: Array<{ role: 'user' | 'assistant'; content: string }> | undefined;
@@ -118,7 +150,10 @@ export class MemorySieve {
       extracted.push(...fastResult.extracted);
       deduplicated += fastResult.deduplicated;
       smartUpdated += fastResult.smart_updated;
-      if (fastResult.extractionLog) extractionLogs.push(fastResult.extractionLog);
+      if (fastResult.extractionLog) {
+        fastResult.extractionLog.input_hash = inputHash; // Fix #4
+        extractionLogs.push(fastResult.extractionLog);
+      }
     }
 
     // 2. Deep channel (LLM structured extraction) — skip for small talk to save LLM calls
@@ -129,6 +164,7 @@ export class MemorySieve {
       extracted.push(...deepResult.extracted);
       deduplicated += deepResult.deduplicated;
       smartUpdated += deepResult.smart_updated;
+      deepResult.extractionLog.input_hash = inputHash; // Fix #4
       extractionLogs.push(deepResult.extractionLog);
       structuredExtractions = deepResult.structuredExtractions;
       deepExtractionCount = structuredExtractions.length;
@@ -401,7 +437,37 @@ export class MemorySieve {
     });
 
     const { memories: parsed, relations } = this.parseStructuredOutput(raw);
+
+    // Fix #3: Retry once with higher temperature if parse returned empty but raw has content
+    if (parsed.length === 0 && raw.length > 50 && !raw.includes('nothing_extracted')) {
+      log.info('Retrying extraction with higher temperature after empty parse');
+      try {
+        const retryRaw = await this.llm.complete(prompt, {
+          maxTokens,
+          temperature: 0.3,
+          systemPrompt: SIEVE_SYSTEM_PROMPT,
+        });
+        const retryResult = this.parseStructuredOutput(retryRaw);
+        if (retryResult.memories.length > 0) {
+          log.info({ count: retryResult.memories.length }, 'Retry extraction succeeded');
+          return { raw: retryRaw, parsed: retryResult.memories, relations: retryResult.relations };
+        }
+      } catch (e: any) {
+        log.warn({ error: e.message }, 'Retry extraction failed');
+      }
+    }
+
     return { raw, parsed, relations };
+  }
+
+  // Fix #3: Attempt to repair common JSON issues
+  private repairJson(text: string): string {
+    let repaired = text;
+    // Remove trailing commas before } or ]
+    repaired = repaired.replace(/,\s*([}\]])/g, '$1');
+    // Fix unescaped newlines inside strings (crude but helpful)
+    repaired = repaired.replace(/(?<=:\s*"[^"]*)\n(?=[^"]*")/g, '\\n');
+    return repaired;
   }
 
   private parseStructuredOutput(raw: string): { memories: ExtractedMemory[]; relations: ExtractedRelation[] } {
@@ -411,17 +477,28 @@ export class MemorySieve {
     try {
       obj = JSON.parse(trimmed);
     } catch {
-      const jsonMatch = trimmed.match(/\{[\s\S]*"memories"[\s\S]*\}/);
-      if (jsonMatch) {
-        try {
-          obj = JSON.parse(jsonMatch[0]);
-        } catch {
-          log.warn('Failed to parse structured output JSON');
+      // Fix #3: Try repairing common JSON issues
+      try {
+        obj = JSON.parse(this.repairJson(trimmed));
+        log.info('JSON parse succeeded after repair');
+      } catch {
+        const jsonMatch = trimmed.match(/\{[\s\S]*"memories"[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            obj = JSON.parse(jsonMatch[0]);
+          } catch {
+            try {
+              obj = JSON.parse(this.repairJson(jsonMatch[0]));
+              log.info('JSON parse succeeded after repair (substring match)');
+            } catch {
+              log.warn('Failed to parse structured output JSON (after repair attempts)');
+              return { memories: [], relations: [] };
+            }
+          }
+        } else {
+          log.warn('No JSON found in structured output');
           return { memories: [], relations: [] };
         }
-      } else {
-        log.warn('No JSON found in structured output');
-        return { memories: [], relations: [] };
       }
     }
 
@@ -436,6 +513,8 @@ export class MemorySieve {
         if (!m.content || typeof m.content !== 'string' || m.content.length < 3) return false;
         if (!m.category || !validCategories.has(m.category)) return false;
         if (typeof m.importance !== 'number' || m.importance < 0 || m.importance > 1) return false;
+        // Fix 8: Filter out NOTHING_TO_EXTRACT that leaked through
+        if (m.content.includes('NOTHING_TO_EXTRACT')) return false;
         return true;
       })
       .map((m: any) => ({

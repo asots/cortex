@@ -20,6 +20,7 @@ import GateSection from './sections/GateSection.js';
 import SieveSection from './sections/SieveSection.js';
 import MarkdownExportSection from './sections/MarkdownExportSection.js';
 import DataManagement from './sections/DataManagement.js';
+import AuthSection from './sections/AuthSection.js';
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -109,6 +110,7 @@ export default function Settings() {
         hybrid: config.search?.hybrid ?? false,
         vectorWeight: config.search?.vectorWeight ?? 0.7,
         textWeight: config.search?.textWeight ?? 0.3,
+        minSimilarity: config.search?.minSimilarity ?? 0.2,
         recencyBoostWindow: config.search?.recencyBoostWindow ?? '7d',
         reranker: {
           enabled: config.search?.reranker?.enabled ?? false,
@@ -134,9 +136,14 @@ export default function Settings() {
         archive: { ttl: config.layers?.archive?.ttl ?? '90d', compressBackToCore: config.layers?.archive?.compressBackToCore ?? false },
       }),
       gate: () => ({
-        maxInjectionTokens: config.gate?.maxInjectionTokens ?? 4000,
+        fixedInjectionTokens: config.gate?.fixedInjectionTokens ?? 500,
+        maxInjectionTokens: config.gate?.maxInjectionTokens ?? 1000,
+        relationBudget: config.gate?.relationBudget ?? 100,
         skipSmallTalk: config.gate?.skipSmallTalk ?? false,
         searchLimit: config.gate?.searchLimit ?? 30,
+        cliffAbsolute: config.gate?.cliffAbsolute ?? 0.4,
+        cliffGap: config.gate?.cliffGap ?? 0.6,
+        cliffFloor: config.gate?.cliffFloor ?? 0.05,
         queryExpansion: {
           enabled: config.gate?.queryExpansion?.enabled ?? false,
           maxVariants: config.gate?.queryExpansion?.maxVariants ?? 3,
@@ -156,6 +163,7 @@ export default function Settings() {
         exportMemoryMd: config.markdownExport?.exportMemoryMd ?? true,
         debounceMs: config.markdownExport?.debounceMs ?? 300000,
       }),
+      auth: () => ({}), // AuthSection manages its own state
     };
 
     const d = sectionDrafts[section]();
@@ -221,8 +229,18 @@ export default function Settings() {
     }
 
     if (section === 'gate') {
+      const fit = Number(draft.fixedInjectionTokens);
+      if (isNaN(fit) || fit < 50) errors.push(t('settings.validationFixedBudgetRange'));
       const mit = Number(draft.maxInjectionTokens);
-      if (isNaN(mit) || mit < 100 || mit > 50000) errors.push(t('settings.validationTokenRange'));
+      if (isNaN(mit) || mit < 100) errors.push(t('settings.validationMemoryBudgetRange'));
+      const rb = Number(draft.relationBudget);
+      if (isNaN(rb) || rb < 0) errors.push(t('settings.validationRelationBudgetRange'));
+      const ca = Number(draft.cliffAbsolute);
+      if (isNaN(ca) || ca < 0.1 || ca > 0.9) errors.push(t('settings.validationCliffRange'));
+      const cg = Number(draft.cliffGap);
+      if (isNaN(cg) || cg < 0.1 || cg > 0.9) errors.push(t('settings.validationCliffRange'));
+      const cf = Number(draft.cliffFloor);
+      if (isNaN(cf) || cf < 0 || cf > 0.5) errors.push(t('settings.validationCliffRange'));
     }
 
     if (section === 'sieve') {
@@ -272,6 +290,7 @@ export default function Settings() {
           hybrid: draft.hybrid,
           vectorWeight: Number(draft.vectorWeight),
           textWeight: Number(draft.textWeight),
+          minSimilarity: Number(draft.minSimilarity ?? 0.2),
           recencyBoostWindow: draft.recencyBoostWindow,
           reranker: {
             enabled: draft.reranker?.enabled ?? false,
@@ -296,9 +315,14 @@ export default function Settings() {
         };
       } else if (section === 'gate') {
         payload.gate = {
+          fixedInjectionTokens: Number(draft.fixedInjectionTokens),
           maxInjectionTokens: Number(draft.maxInjectionTokens),
+          relationBudget: Number(draft.relationBudget),
           skipSmallTalk: draft.skipSmallTalk,
           searchLimit: Number(draft.searchLimit),
+          cliffAbsolute: Number(draft.cliffAbsolute),
+          cliffGap: Number(draft.cliffGap),
+          cliffFloor: Number(draft.cliffFloor),
           queryExpansion: {
             enabled: draft.queryExpansion?.enabled ?? false,
             maxVariants: Number(draft.queryExpansion?.maxVariants ?? 3),
@@ -948,6 +972,17 @@ export default function Settings() {
         updateDraft={updateDraft}
         t={t}
       />
+
+      {/* Auth Section */}
+      <div style={{
+        background: 'var(--bg-card)', borderRadius: 'var(--radius)',
+        border: '1px solid var(--border)', padding: 20, marginBottom: 20,
+      }}>
+        <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>
+          🔐 {t('settings.authSection')}
+        </h3>
+        <AuthSection />
+      </div>
 
       <DataManagement
         config={config}

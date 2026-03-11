@@ -230,7 +230,9 @@ docker compose up -d
 
 Open **http://localhost:21100** → Dashboard → **Settings** → pick your LLM provider, paste API key. Done.
 
-> No `.env` files required. Everything is configurable from the Dashboard.
+> No `.env` files required for local use. Everything is configurable from the Dashboard.
+
+By default, the Dashboard and API have **no auth token** — anyone who can reach port 21100 has full access. This is fine for localhost, but **read the security section below before exposing to a network.**
 
 <details>
 <summary><b>Without Docker</b></summary>
@@ -241,6 +243,64 @@ cd cortex && pnpm install && pnpm dev
 ```
 
 </details>
+
+---
+
+## Configuration
+
+### Environment Variables
+
+Create a `.env` file in the project root (or set in `docker-compose.yml` → `environment`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `CORTEX_PORT` | `21100` | Server port |
+| `CORTEX_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` for LAN) |
+| `CORTEX_AUTH_TOKEN` | *(empty)* | **Auth token** — protects Dashboard + API |
+| `CORTEX_DB_PATH` | `cortex/brain.db` | SQLite database path |
+| `OPENAI_API_KEY` | — | OpenAI API key (LLM + embedding) |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key |
+| `OLLAMA_BASE_URL` | — | Ollama URL for local models |
+| `TZ` | `UTC` | Timezone (e.g. `Asia/Tokyo`) |
+| `LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
+| `NEO4J_URI` | — | Neo4j connection (optional) |
+| `NEO4J_USER` | — | Neo4j user |
+| `NEO4J_PASSWORD` | — | Neo4j password |
+
+> 💡 **LLM and embedding settings** can also be configured in Dashboard → Settings, which is often easier. Env vars are mainly needed for `CORTEX_AUTH_TOKEN`, `CORTEX_HOST`, and `TZ`.
+
+### Auth Token — How It Works
+
+When `CORTEX_AUTH_TOKEN` is set:
+
+1. **Dashboard** prompts for the token on first visit (saved in browser)
+2. **All API calls** require `Authorization: Bearer <your-token>` header
+3. **MCP clients** and **Bridge plugins** must include the token in their config
+
+When `CORTEX_AUTH_TOKEN` is **not set** (default):
+- No auth required — open access
+- Fine for `localhost` / personal use
+- ⚠️ **Dangerous** if the port is exposed to the internet
+
+**Where to find your token:** It's whatever you set in `CORTEX_AUTH_TOKEN`. You choose it — there's no auto-generated token. Write it down and use the same value in all client configs.
+
+### 🔒 Security Checklist
+
+If you're exposing Cortex beyond localhost (LAN, VPN, or internet):
+
+- [ ] **Set `CORTEX_AUTH_TOKEN`** — use a strong random string (32+ chars)
+- [ ] **Use HTTPS/SSL** — put a reverse proxy (Caddy, Nginx, Traefik) in front with TLS
+- [ ] **Restrict `CORTEX_HOST`** — bind to `127.0.0.1` or your Tailscale/VPN IP, not `0.0.0.0`
+- [ ] **Firewall rules** — only allow trusted IPs to reach the port
+- [ ] **Keep updated** — check Dashboard for version updates
+
+```bash
+# Example: strong random token
+openssl rand -hex 24
+# → e.g. 3a7f2b...  (use this as CORTEX_AUTH_TOKEN)
+```
+
+> ⚠️ **Without HTTPS, your token is sent in plaintext.** Always use TLS for non-localhost deployments.
 
 <details>
 <summary><b>With Neo4j (knowledge graph)</b></summary>
@@ -270,20 +330,33 @@ NEO4J_PASSWORD=your-password
 
 ## Connect Your AI
 
+> 💡 If you set `CORTEX_AUTH_TOKEN`, include it in every client config below. Examples show both with and without auth.
+
 ### OpenClaw (Recommended)
 
 ```bash
 openclaw plugins install @cortexmem/openclaw
-echo 'CORTEX_URL=http://localhost:21100' >> .env
 ```
+
+Configure in OpenClaw's plugin settings (Dashboard or `openclaw.json`):
+
+```json
+{
+  "cortexUrl": "http://localhost:21100",
+  "authToken": "your-token-here",
+  "agentId": "my-agent"
+}
+```
+
+> Without auth: omit `authToken`. Without custom agent: omit `agentId` (defaults to `"openclaw"`).
 
 The plugin auto-hooks into OpenClaw's lifecycle:
 
 | Hook | When | What |
 |---|---|---|
-| `onBeforeResponse` | Before AI responds | Recalls & injects relevant memories |
-| `onAfterResponse` | After AI responds | Extracts & stores key information |
-| `onBeforeCompaction` | Before context compression | Emergency save before info is lost |
+| `before_agent_start` | Before AI responds | Recalls & injects relevant memories |
+| `agent_end` | After AI responds | Extracts & stores key information |
+| `before_compaction` | Before context compression | Emergency save before info is lost |
 
 Plus `cortex_recall` and `cortex_remember` tools for on-demand use.
 
@@ -296,11 +369,17 @@ Settings → Developer → Edit Config:
   "mcpServers": {
     "cortex": {
       "command": "npx",
-      "args": ["@cortexmem/mcp", "--server-url", "http://localhost:21100"]
+      "args": ["@cortexmem/mcp", "--server-url", "http://localhost:21100"],
+      "env": {
+        "CORTEX_AUTH_TOKEN": "your-token-here",
+        "CORTEX_AGENT_ID": "my-agent"
+      }
     }
   }
 }
 ```
+
+> Without auth: remove the `CORTEX_AUTH_TOKEN` line from `env`.
 
 ### Other MCP Clients
 
@@ -315,7 +394,11 @@ Settings → MCP → Add new global MCP server:
     "cortex": {
       "command": "npx",
       "args": ["@cortexmem/mcp"],
-      "env": { "CORTEX_URL": "http://localhost:21100" }
+      "env": {
+        "CORTEX_URL": "http://localhost:21100",
+        "CORTEX_AUTH_TOKEN": "your-token-here",
+        "CORTEX_AGENT_ID": "my-agent"
+      }
     }
   }
 }
@@ -326,7 +409,12 @@ Settings → MCP → Add new global MCP server:
 <summary><b>Claude Code</b></summary>
 
 ```bash
+# Without auth
 claude mcp add cortex -- npx @cortexmem/mcp --server-url http://localhost:21100
+
+# With auth + agent ID
+CORTEX_AUTH_TOKEN=your-token-here CORTEX_AGENT_ID=my-agent \
+  claude mcp add cortex -- npx @cortexmem/mcp --server-url http://localhost:21100
 ```
 </details>
 
@@ -339,7 +427,10 @@ claude mcp add cortex -- npx @cortexmem/mcp --server-url http://localhost:21100
     "cortex": {
       "command": "npx",
       "args": ["@cortexmem/mcp", "--server-url", "http://localhost:21100"],
-      "env": { "CORTEX_AGENT_ID": "default" }
+      "env": {
+        "CORTEX_AGENT_ID": "my-agent",
+        "CORTEX_AUTH_TOKEN": "your-token-here"
+      }
     }
   }
 }
@@ -349,15 +440,16 @@ claude mcp add cortex -- npx @cortexmem/mcp --server-url http://localhost:21100
 ### REST API
 
 ```bash
-# Store
-curl -X POST http://localhost:21100/api/v1/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"user_message":"I love sushi","assistant_message":"Noted!","agent_id":"default"}'
-
-# Recall
+# Without auth
 curl -X POST http://localhost:21100/api/v1/recall \
   -H "Content-Type: application/json" \
   -d '{"query":"What food do I like?","agent_id":"default"}'
+
+# With auth
+curl -X POST http://localhost:21100/api/v1/ingest \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-token-here" \
+  -d '{"user_message":"I love sushi","assistant_message":"Noted!","agent_id":"default"}'
 ```
 
 ---

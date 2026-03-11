@@ -233,7 +233,9 @@ docker compose up -d
 
 打开 **http://localhost:21100** → 管理面板 → **设置** → 选择 LLM 提供商，填入 API Key。搞定。
 
-> 不需要 `.env` 文件。所有配置都在面板里完成。
+> 本地使用不需要 `.env` 文件。所有 LLM 配置都在面板里完成。
+
+默认情况下，面板和 API **没有访问密码** —— 任何能访问 21100 端口的人都可以完全操作。本地使用没问题，但**对外开放前请务必阅读下方安全配置。**
 
 <details>
 <summary><b>不用 Docker</b></summary>
@@ -243,6 +245,64 @@ git clone https://github.com/rikouu/cortex.git
 cd cortex && pnpm install && pnpm dev
 ```
 </details>
+
+---
+
+## 配置
+
+### 环境变量
+
+在项目根目录创建 `.env` 文件（或在 `docker-compose.yml` 的 `environment` 中设置）：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `CORTEX_PORT` | `21100` | 服务端口 |
+| `CORTEX_HOST` | `127.0.0.1` | 绑定地址（`0.0.0.0` 开放局域网） |
+| `CORTEX_AUTH_TOKEN` | *(空)* | **访问令牌** — 保护面板和 API |
+| `CORTEX_DB_PATH` | `cortex/brain.db` | SQLite 数据库路径 |
+| `OPENAI_API_KEY` | — | OpenAI API Key（LLM + 向量） |
+| `ANTHROPIC_API_KEY` | — | Anthropic API Key |
+| `OLLAMA_BASE_URL` | — | Ollama 地址（本地模型） |
+| `TZ` | `UTC` | 时区（如 `Asia/Tokyo`、`Asia/Shanghai`） |
+| `LOG_LEVEL` | `info` | 日志级别（`debug`/`info`/`warn`/`error`） |
+| `NEO4J_URI` | — | Neo4j 连接地址（可选） |
+| `NEO4J_USER` | — | Neo4j 用户名 |
+| `NEO4J_PASSWORD` | — | Neo4j 密码 |
+
+> 💡 **LLM 和向量模型**也可以在面板 → 设置中配置，通常更方便。环境变量主要用于 `CORTEX_AUTH_TOKEN`、`CORTEX_HOST` 和 `TZ`。
+
+### 访问令牌说明
+
+设置了 `CORTEX_AUTH_TOKEN` 后：
+
+1. **面板**首次访问需要输入令牌（浏览器会保存）
+2. **所有 API** 调用需要 `Authorization: Bearer <令牌>` 请求头
+3. **MCP 客户端**和 **Bridge 插件**需要在配置中填入令牌
+
+没有设置 `CORTEX_AUTH_TOKEN` 时（默认）：
+- 无需认证 — 完全开放
+- 适合 `localhost` / 个人使用
+- ⚠️ 如果端口暴露到网络上则**非常危险**
+
+**令牌在哪里找？** 就是你自己设的 `CORTEX_AUTH_TOKEN` 值。没有自动生成的令牌——你设什么就是什么，在所有客户端配置中填相同的值即可。
+
+### 🔒 安全清单
+
+如果你要把 Cortex 暴露到局域网、VPN 或公网：
+
+- [ ] **设置 `CORTEX_AUTH_TOKEN`** — 使用强随机字符串（32位以上）
+- [ ] **启用 HTTPS/SSL** — 在前面放反向代理（Caddy、Nginx、Traefik）配置 TLS
+- [ ] **限制 `CORTEX_HOST`** — 绑定到 `127.0.0.1` 或 Tailscale/VPN IP，不要用 `0.0.0.0`
+- [ ] **防火墙** — 只允许可信 IP 访问端口
+- [ ] **保持更新** — 面板会自动检测新版本
+
+```bash
+# 生成一个强随机令牌
+openssl rand -hex 24
+# → 例如 3a7f2b...（把这个设为 CORTEX_AUTH_TOKEN）
+```
+
+> ⚠️ **没有 HTTPS 的话，令牌是明文传输的。** 非本地部署务必配置 TLS。
 
 <details>
 <summary><b>启用知识图谱 (Neo4j)</b></summary>
@@ -271,20 +331,33 @@ NEO4J_PASSWORD=your-password
 
 ## 接入你的 AI
 
+> 💡 如果设置了 `CORTEX_AUTH_TOKEN`，需要在下面每个客户端配置中加上令牌。示例同时展示了有/无认证的写法。
+
 ### OpenClaw（推荐）
 
 ```bash
 openclaw plugins install @cortexmem/openclaw
-echo 'CORTEX_URL=http://localhost:21100' >> .env
 ```
+
+在 OpenClaw 插件设置中配置（Dashboard 或 `openclaw.json`）：
+
+```json
+{
+  "cortexUrl": "http://localhost:21100",
+  "authToken": "你的令牌",
+  "agentId": "my-agent"
+}
+```
+
+> 不用认证：省略 `authToken`。不需要自定义 agent：省略 `agentId`（默认 `"openclaw"`）。
 
 插件自动接入 OpenClaw 生命周期：
 
 | Hook | 时机 | 做什么 |
 |---|---|---|
-| `onBeforeResponse` | AI 回复前 | 回忆并注入相关记忆 |
-| `onAfterResponse` | AI 回复后 | 提取并保存关键信息 |
-| `onBeforeCompaction` | 上下文压缩前 | 紧急保存即将丢失的信息 |
+| `before_agent_start` | AI 回复前 | 回忆并注入相关记忆 |
+| `agent_end` | AI 回复后 | 提取并保存关键信息 |
+| `before_compaction` | 上下文压缩前 | 紧急保存即将丢失的信息 |
 
 另有 `cortex_recall` 和 `cortex_remember` 工具供按需使用。
 
@@ -297,11 +370,17 @@ echo 'CORTEX_URL=http://localhost:21100' >> .env
   "mcpServers": {
     "cortex": {
       "command": "npx",
-      "args": ["@cortexmem/mcp", "--server-url", "http://localhost:21100"]
+      "args": ["@cortexmem/mcp", "--server-url", "http://localhost:21100"],
+      "env": {
+        "CORTEX_AUTH_TOKEN": "你的令牌",
+        "CORTEX_AGENT_ID": "my-agent"
+      }
     }
   }
 }
 ```
+
+> 不用认证：删除 `env` 中的 `CORTEX_AUTH_TOKEN` 行。
 
 ### 其他 MCP 客户端
 
@@ -316,7 +395,11 @@ echo 'CORTEX_URL=http://localhost:21100' >> .env
     "cortex": {
       "command": "npx",
       "args": ["@cortexmem/mcp"],
-      "env": { "CORTEX_URL": "http://localhost:21100" }
+      "env": {
+        "CORTEX_URL": "http://localhost:21100",
+        "CORTEX_AUTH_TOKEN": "你的令牌",
+        "CORTEX_AGENT_ID": "my-agent"
+      }
     }
   }
 }
@@ -327,7 +410,12 @@ echo 'CORTEX_URL=http://localhost:21100' >> .env
 <summary><b>Claude Code</b></summary>
 
 ```bash
+# 不用认证
 claude mcp add cortex -- npx @cortexmem/mcp --server-url http://localhost:21100
+
+# 带认证 + agent ID
+CORTEX_AUTH_TOKEN=你的令牌 CORTEX_AGENT_ID=my-agent \
+  claude mcp add cortex -- npx @cortexmem/mcp --server-url http://localhost:21100
 ```
 </details>
 
@@ -340,7 +428,10 @@ claude mcp add cortex -- npx @cortexmem/mcp --server-url http://localhost:21100
     "cortex": {
       "command": "npx",
       "args": ["@cortexmem/mcp", "--server-url", "http://localhost:21100"],
-      "env": { "CORTEX_AGENT_ID": "default" }
+      "env": {
+        "CORTEX_AGENT_ID": "my-agent",
+        "CORTEX_AUTH_TOKEN": "你的令牌"
+      }
     }
   }
 }
@@ -350,15 +441,16 @@ claude mcp add cortex -- npx @cortexmem/mcp --server-url http://localhost:21100
 ### REST API
 
 ```bash
-# 存储
-curl -X POST http://localhost:21100/api/v1/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"user_message":"我喜欢寿司","assistant_message":"记住了！","agent_id":"default"}'
-
-# 回忆
+# 不用认证
 curl -X POST http://localhost:21100/api/v1/recall \
   -H "Content-Type: application/json" \
   -d '{"query":"我喜欢什么食物？","agent_id":"default"}'
+
+# 带认证
+curl -X POST http://localhost:21100/api/v1/ingest \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer 你的令牌" \
+  -d '{"user_message":"我喜欢寿司","assistant_message":"记住了！","agent_id":"default"}'
 ```
 
 ---

@@ -104,7 +104,7 @@ export class LLMReranker implements Reranker {
     const candidates = results.slice(0, Math.min(results.length, n * 2));
 
     try {
-      const documents = candidates.map((r, i) => `[${i}] ${r.content}`).join('\n');
+      const documents = candidates.map((r, i) => `[${i}] (sim=${r.vectorScore.toFixed(3)}) ${r.content}`).join('\n');
 
       const response = await this.llm.complete(
         `Rate how useful each memory would be if injected into an AI assistant's context to help answer the query. Output ONLY a JSON array of objects with "index" and "score" (0.0 to 1.0), sorted by score descending.

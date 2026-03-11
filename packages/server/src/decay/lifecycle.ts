@@ -117,7 +117,7 @@ export class LifecycleEngine {
 
       // Phase 3: Core dedup and merge
       log.info('Phase 3: deduplicateCore');
-      report.merged = await this.deduplicateCore(dryRun);
+      report.merged = await this.deduplicateCore(dryRun, agentId);
 
       // Phase 4: Core -> Archive demotion
       log.info('Phase 4: archiveStale');
@@ -125,7 +125,7 @@ export class LifecycleEngine {
 
       // Phase 5: Archive -> Core compression (never lose data)
       log.info('Phase 5: compressArchive');
-      report.compressedToCore = await this.compressArchive(dryRun);
+      report.compressedToCore = await this.compressArchive(dryRun, agentId);
 
       // Phase 6: Update decay scores
       log.info('Phase 6: updateDecayScores');
@@ -145,6 +145,7 @@ export class LifecycleEngine {
       // Phase 8: Clean old access logs (keep 30 days)
       log.info('Phase 8: cleanAccessLogs');
       try {
+        const db = getDb();
         const cutoff = new Date(Date.now() - 30 * 86400_000).toISOString();
         const result = db.prepare("DELETE FROM access_log WHERE accessed_at < ?").run(cutoff);
         if (result.changes > 0) {
@@ -240,24 +241,32 @@ export class LifecycleEngine {
           affected.push({ id: entry.id, content: entry.content, category: entry.category, importance: entry.importance, action: 'promote', score: 1.0, reason: 'high_importance_auto' });
         }
         if (!dryRun) {
-          const newId = generateId();
-          insertMemory({
-            id: newId,
-            layer: 'core',
-            category: entry.category === 'context' ? 'fact' : entry.category,
-            content: entry.content,
-            importance: Math.max(entry.importance, 0.6),
-            confidence: entry.confidence,
-            agent_id: entry.agent_id,
-            source: 'lifecycle:auto-promotion',
-          });
-          updateMemory(entry.id, { superseded_by: newId });
-          try {
-            const emb = await this.embeddingProvider.embed(entry.content);
-            if (emb.length > 0) await this.vectorBackend.upsert(newId, emb);
-            await this.vectorBackend.delete([entry.id]);
-          } catch { /* best effort */ }
-          insertLifecycleLog('promote', [entry.id, newId], { score: 1.0, from: 'working', to: 'core', reason: 'high_importance_auto', agent_id: agentId || 'all' });
+          const newCategory = entry.category === 'context' ? 'fact' : entry.category;
+          const needsCategoryChange = newCategory !== entry.category;
+          if (needsCategoryChange) {
+            // Category change requires insert+supersede to maintain category integrity
+            const newId = generateId();
+            insertMemory({
+              id: newId, layer: 'core', category: newCategory,
+              content: entry.content, importance: Math.max(entry.importance, threshold),
+              confidence: entry.confidence, agent_id: entry.agent_id,
+              source: 'lifecycle:auto-promotion',
+            });
+            updateMemory(entry.id, { superseded_by: newId });
+            try {
+              const emb = await this.embeddingProvider.embed(entry.content);
+              if (emb.length > 0) await this.vectorBackend.upsert(newId, emb);
+              await this.vectorBackend.delete([entry.id]);
+            } catch { /* best effort */ }
+            insertLifecycleLog('promote', [entry.id, newId], { score: 1.0, from: 'working', to: 'core', reason: 'high_importance_auto', agent_id: agentId || 'all' });
+          } else {
+            // Same content, same category → in-place layer update (preserves ID, access_count)
+            updateMemory(entry.id, {
+              layer: 'core' as MemoryLayer,
+              importance: Math.max(entry.importance, threshold),
+            });
+            insertLifecycleLog('promote', [entry.id], { score: 1.0, from: 'working', to: 'core', reason: 'high_importance_auto_inplace', agent_id: agentId || 'all' });
+          }
         }
         promoted++;
         continue;
@@ -269,27 +278,31 @@ export class LifecycleEngine {
           affected.push({ id: entry.id, content: entry.content, category: entry.category, importance: entry.importance, action: 'promote', score, reason: 'score_threshold' });
         }
         if (!dryRun) {
-          const newId = generateId();
-          insertMemory({
-            id: newId,
-            layer: 'core',
-            category: entry.category === 'context' ? 'fact' : entry.category,
-            content: entry.content,
-            importance: Math.max(entry.importance, 0.6),
-            confidence: entry.confidence,
-            agent_id: entry.agent_id,
-            source: 'lifecycle:promotion',
-          });
-          updateMemory(entry.id, { superseded_by: newId });
-
-          // Re-index vector
-          try {
-            const emb = await this.embeddingProvider.embed(entry.content);
-            if (emb.length > 0) await this.vectorBackend.upsert(newId, emb);
-            await this.vectorBackend.delete([entry.id]);
-          } catch { /* best effort */ }
-
-          insertLifecycleLog('promote', [entry.id, newId], { score, from: 'working', to: 'core', agent_id: agentId || 'all' });
+          const newCategory = entry.category === 'context' ? 'fact' : entry.category;
+          const needsCategoryChange = newCategory !== entry.category;
+          if (needsCategoryChange) {
+            const newId = generateId();
+            insertMemory({
+              id: newId, layer: 'core', category: newCategory,
+              content: entry.content, importance: Math.max(entry.importance, threshold),
+              confidence: entry.confidence, agent_id: entry.agent_id,
+              source: 'lifecycle:promotion',
+            });
+            updateMemory(entry.id, { superseded_by: newId });
+            try {
+              const emb = await this.embeddingProvider.embed(entry.content);
+              if (emb.length > 0) await this.vectorBackend.upsert(newId, emb);
+              await this.vectorBackend.delete([entry.id]);
+            } catch { /* best effort */ }
+            insertLifecycleLog('promote', [entry.id, newId], { score, from: 'working', to: 'core', agent_id: agentId || 'all' });
+          } else {
+            // In-place promotion: just update the layer
+            updateMemory(entry.id, {
+              layer: 'core' as MemoryLayer,
+              importance: Math.max(entry.importance, threshold),
+            });
+            insertLifecycleLog('promote', [entry.id], { score, from: 'working', to: 'core', reason: 'inplace', agent_id: agentId || 'all' });
+          }
         }
         promoted++;
       }
@@ -306,11 +319,13 @@ export class LifecycleEngine {
     return (baseImportance * 0.3 + accessFactor * 0.4 + importanceFactor * 0.3);
   }
 
-  private async deduplicateCore(dryRun: boolean): Promise<number> {
+  private async deduplicateCore(dryRun: boolean, agentId?: string): Promise<number> {
     const db = getDb();
+    const agentFilter = agentId ? ' AND agent_id = ?' : '';
+    const params = agentId ? [agentId] : [];
     const coreEntries = db.prepare(
-      "SELECT * FROM memories WHERE layer = 'core' AND superseded_by IS NULL ORDER BY created_at DESC"
-    ).all() as Memory[];
+      `SELECT * FROM memories WHERE layer = 'core' AND superseded_by IS NULL${agentFilter} ORDER BY created_at DESC`
+    ).all(...params) as Memory[];
 
     if (coreEntries.length < 2) return 0;
 
@@ -407,17 +422,19 @@ export class LifecycleEngine {
     return archived;
   }
 
-  private async compressArchive(dryRun: boolean): Promise<number> {
+  private async compressArchive(dryRun: boolean, agentId?: string): Promise<number> {
     if (!this.config.layers.archive.compressBackToCore) return 0;
 
     const db = getDb();
+    const agentFilter = agentId ? ' AND agent_id = ?' : '';
+    const params = agentId ? [agentId] : [];
     const expired = db.prepare(`
       SELECT * FROM memories
       WHERE layer = 'archive'
         AND expires_at IS NOT NULL
         AND expires_at < datetime('now')
-        AND superseded_by IS NULL
-    `).all() as Memory[];
+        AND superseded_by IS NULL${agentFilter}
+    `).all(...params) as Memory[];
 
     if (expired.length === 0) return 0;
 
@@ -503,7 +520,7 @@ export class LifecycleEngine {
       insertLifecycleLog('compress', allOriginalIds, {
         compressed_count: expired.length,
         groups: groups.size,
-        agent_id: 'all',
+        agent_id: agentId || 'all',
       });
     }
 

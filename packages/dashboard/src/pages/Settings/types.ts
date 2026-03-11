@@ -1,4 +1,4 @@
-export type SectionKey = 'llm' | 'search' | 'lifecycle' | 'layers' | 'gate' | 'sieve' | 'markdownExport';
+export type SectionKey = 'llm' | 'search' | 'lifecycle' | 'layers' | 'gate' | 'sieve' | 'markdownExport' | 'auth';
 
 // ─── Provider & Model Presets ────────────────────────────────────────────────
 

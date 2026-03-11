@@ -14,8 +14,8 @@
  *   }
  * }
  *
- * CLI flags: --server-url <url>  --agent-id <id>
- * Env vars:  CORTEX_URL          CORTEX_AGENT_ID
+ * CLI flags: --server-url <url>  --agent-id <id>  --auth-token <token>
+ * Env vars:  CORTEX_URL          CORTEX_AGENT_ID   CORTEX_AUTH_TOKEN
  */
 
 const CORTEX_URL = process.argv.includes('--server-url')
@@ -26,10 +26,15 @@ const CORTEX_AGENT_ID = process.argv.includes('--agent-id')
   ? process.argv[process.argv.indexOf('--agent-id') + 1]
   : process.env.CORTEX_AGENT_ID || '';
 
+const CORTEX_AUTH_TOKEN = process.argv.includes('--auth-token')
+  ? process.argv[process.argv.indexOf('--auth-token') + 1]
+  : process.env.CORTEX_AUTH_TOKEN || '';
+
 async function forwardToServer(msg: any): Promise<any> {
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (CORTEX_AGENT_ID) headers['x-agent-id'] = CORTEX_AGENT_ID;
+    if (CORTEX_AUTH_TOKEN) headers['Authorization'] = `Bearer ${CORTEX_AUTH_TOKEN}`;
 
     const res = await fetch(`${CORTEX_URL}/mcp/message`, {
       method: 'POST',

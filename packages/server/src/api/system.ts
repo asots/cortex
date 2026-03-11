@@ -356,6 +356,14 @@ export function registerSystemRoutes(app: FastifyInstance, cortex: CortexApp): v
     };
   });
 
+  // Export full config (includes secrets — for backup/migration)
+  app.get('/api/v1/config/export', async () => {
+    const config = getConfig();
+    // Return full config with real apiKeys but strip internal-only fields
+    const { ...exportable } = config;
+    return exportable;
+  });
+
   // Hot update config
   app.patch('/api/v1/config', async (req) => {
     const body = req.body as any;
@@ -404,6 +412,28 @@ export function registerSystemRoutes(app: FastifyInstance, cortex: CortexApp): v
   app.post('/api/v1/reindex', async (req, reply) => {
     const db = getDb();
     const memories = db.prepare('SELECT id, content FROM memories WHERE superseded_by IS NULL').all() as Pick<Memory, 'id' | 'content'>[];
+    const activeIds = new Set(memories.map(m => m.id));
+
+    // Clean ghost vectors: entries in vector index for deleted/superseded memories
+    let ghostsCleaned = 0;
+    try {
+      const vecTable = (() => {
+        try { db.prepare('SELECT 1 FROM memories_vec LIMIT 0').get(); return 'memories_vec'; } catch { /* */ }
+        try { db.prepare('SELECT 1 FROM memories_vec_fallback LIMIT 0').get(); return 'memories_vec_fallback'; } catch { /* */ }
+        return null;
+      })();
+      if (vecTable) {
+        const vecIds = (db.prepare(`SELECT memory_id FROM ${vecTable}`).all() as { memory_id: string }[]).map(r => r.memory_id);
+        const ghostIds = vecIds.filter(id => !activeIds.has(id));
+        if (ghostIds.length > 0) {
+          await cortex.vectorBackend.delete(ghostIds);
+          ghostsCleaned = ghostIds.length;
+          log.info({ count: ghostsCleaned }, 'Cleaned ghost vectors during reindex');
+        }
+      }
+    } catch (e: any) {
+      log.warn({ error: e.message }, 'Ghost vector cleanup failed, continuing with reindex');
+    }
 
     let indexed = 0;
     let errors = 0;
@@ -428,6 +458,14 @@ export function registerSystemRoutes(app: FastifyInstance, cortex: CortexApp): v
       }
     }
 
-    return { ok: true, total: memories.length, indexed, errors };
+    // Also rebuild FTS index with jieba tokenization
+    try {
+      const { rebuildFtsIndex } = await import('../db/fts-rebuild.js');
+      rebuildFtsIndex();
+    } catch (e: any) {
+      log.warn({ error: e.message }, 'FTS rebuild during reindex failed');
+    }
+
+    return { ok: true, total: memories.length, indexed, errors, ghosts_cleaned: ghostsCleaned };
   });
 }

@@ -131,6 +131,7 @@ export const getLifecycleLogs = (limit = 50, agentId?: string, offset = 0) =>
 
 // Config
 export const getConfig = () => request('/config');
+export const exportFullConfig = () => request('/config/export');
 
 export const updateConfig = (data: any) =>
   request('/config', { method: 'PATCH', body: JSON.stringify(data) });
@@ -204,4 +205,4 @@ export const testConnections = () =>
 
 // Search/Recall test
 export const testRecall = (query: string, agentId?: string) =>
-  request('/recall', { method: 'POST', body: JSON.stringify({ query, agent_id: agentId, limit: 10 }) });
+  request('/recall', { method: 'POST', body: JSON.stringify({ query, agent_id: agentId, limit: 10, skip_filters: true }) });

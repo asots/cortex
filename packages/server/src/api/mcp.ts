@@ -116,6 +116,13 @@ export function registerMCPRoutes(app: FastifyInstance, cortex: CortexApp): void
   // JSON-RPC endpoint for MCP tool calls
   app.post('/mcp/message', async (req) => {
     const msg = req.body as any;
+    // Inject x-agent-id header into tool call arguments if not already set
+    const agentIdFromHeader = (req.headers as any)['x-agent-id'] as string | undefined;
+    if (agentIdFromHeader && msg?.method === 'tools/call' && msg?.params?.arguments) {
+      if (!msg.params.arguments.agent_id || msg.params.arguments.agent_id === 'mcp') {
+        msg.params.arguments.agent_id = agentIdFromHeader;
+      }
+    }
     return mcpServer.handleMessage(msg);
   });
 

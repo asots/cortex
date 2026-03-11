@@ -71,7 +71,8 @@ const CortexConfigSchema = z.object({
     }).default({}),
   }).default({}),
   gate: z.object({
-    maxInjectionTokens: z.number().default(4000),
+    maxInjectionTokens: z.number().min(100).default(1000),
+    fixedInjectionTokens: z.number().min(50).default(500),
     skipSmallTalk: z.boolean().default(true),
     searchLimit: z.number().min(5).max(50).default(30),
     layerWeights: z.object({
@@ -80,11 +81,14 @@ const CortexConfigSchema = z.object({
       archive: z.number().default(0.5),
     }).default({}),
     queryExpansion: z.object({
-      enabled: z.boolean().default(false),
+      enabled: z.boolean().default(true),
       maxVariants: z.number().min(2).max(5).default(3),
     }).default({}),
     relationInjection: z.boolean().default(true),
-    relationBudget: z.number().min(50).max(1000).default(300),
+    relationBudget: z.number().min(0).default(100),
+    cliffAbsolute: z.number().min(0.1).max(0.9).default(0.4),
+    cliffGap: z.number().min(0.1).max(0.9).default(0.6),
+    cliffFloor: z.number().min(0).max(0.5).default(0.05),
   }).default({}),
   sieve: z.object({
     highSignalImmediate: z.boolean().default(true),
@@ -99,6 +103,7 @@ const CortexConfigSchema = z.object({
     similarityThreshold: z.number().min(0.1).max(0.8).default(0.35),
     exactDupThreshold: z.number().min(0.01).max(0.2).default(0.08),
     relationExtraction: z.boolean().default(true),
+    minImportance: z.number().min(0.1).max(0.9).default(0.3), // Fix #9
   }).default({}),
   lifecycle: z.object({
     schedule: z.string().default('0 3 * * *'),
@@ -114,15 +119,16 @@ const CortexConfigSchema = z.object({
     hybrid: z.boolean().default(true),
     vectorWeight: z.number().default(0.7),
     textWeight: z.number().default(0.3),
+    minSimilarity: z.number().min(0).max(1).default(0.01),
     recencyBoostWindow: z.string().default('7d'),
     accessBoostCap: z.number().default(10),
     reranker: z.object({
-      enabled: z.boolean().default(false),
-      provider: z.enum(['cohere', 'llm', 'none']).default('none'),
+      enabled: z.boolean().default(true),
+      provider: z.enum(['cohere', 'llm', 'none']).default('llm'),
       apiKey: z.string().optional(),
       model: z.string().optional(),
       topN: z.number().default(15),
-      weight: z.number().min(0).max(1).default(0.5),
+      weight: z.number().min(0).max(1).default(0.7),
     }).default({}),
   }).default({}),
   markdownExport: z.object({

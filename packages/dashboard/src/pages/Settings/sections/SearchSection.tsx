@@ -28,6 +28,20 @@ export default function SearchSection({
           {renderLinkedWeights()}
           {renderDuration(t('settings.recencyBoostWindow'), t('settings.recencyBoostWindowDesc'), 'recencyBoostWindow')}
 
+          {/* Min Similarity Threshold */}
+          <div style={{ margin: '12px 0' }}>
+            <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>
+              🎚️ {t('settings.minSimilarity')} — {((draft?.minSimilarity ?? 0.2) * 100).toFixed(0)}%
+            </label>
+            <input
+              type="range" min="0" max="0.8" step="0.05"
+              value={draft?.minSimilarity ?? 0.2}
+              onChange={e => setDraft((d: any) => ({ ...d, minSimilarity: Number(e.target.value) }))}
+              style={{ width: '100%' }}
+            />
+            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('settings.minSimilarityDesc')}</div>
+          </div>
+
           <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 12 }}>
             <label style={{ fontWeight: 600, display: 'block', marginBottom: 8 }}>🔍 Search Enhancement</label>
 
@@ -93,6 +107,7 @@ export default function SearchSection({
             {displayRow(t('settings.vectorWeight'), config.search?.vectorWeight?.toFixed(2))}
             {displayRow(t('settings.textWeight'), config.search?.textWeight?.toFixed(2))}
             {displayRow(t('settings.recencyBoostWindow'), humanizeDuration(config.search?.recencyBoostWindow), t('settings.recencyBoostWindowDesc'))}
+            {displayRow(`🎚️ ${t('settings.minSimilarity')}`, `${((config.search?.minSimilarity ?? 0.2) * 100).toFixed(0)}%`, t('settings.minSimilarityDesc'))}
             {displayRow('Reranker', config.search?.reranker?.enabled ? `${config.search.reranker.provider} (top ${config.search.reranker.topN}, weight ${((config.search.reranker.weight ?? 0.5) * 100).toFixed(0)}%)` : 'Off')}
           </tbody>
         </table>

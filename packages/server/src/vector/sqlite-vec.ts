@@ -93,6 +93,31 @@ export class SqliteVecBackend implements VectorBackend {
 
     if (this.useVec0) {
       try {
+        if (filter?.agent_id) {
+          // vec0 virtual table doesn't support WHERE on non-vector columns.
+          // Over-fetch then filter by agent_id via batch lookup.
+          const overFetch = topK * 5;
+          const rows = db.prepare(`
+            SELECT memory_id as id, distance
+            FROM memories_vec
+            WHERE embedding MATCH ?
+            ORDER BY distance
+            LIMIT ?
+          `).all(JSON.stringify(query), overFetch) as VectorSearchResult[];
+
+          const ids = rows.map(r => r.id);
+          if (ids.length > 0) {
+            const placeholders = ids.map(() => '?').join(',');
+            const validIds = new Set(
+              (db.prepare(
+                `SELECT id FROM memories WHERE id IN (${placeholders}) AND (agent_id = ? OR agent_id IS NULL OR agent_id = '') AND superseded_by IS NULL`
+              ).all(...ids, filter.agent_id) as { id: string }[]).map(r => r.id)
+            );
+            return rows.filter(r => validIds.has(r.id)).slice(0, topK);
+          }
+          return [];
+        }
+
         const rows = db.prepare(`
           SELECT memory_id as id, distance
           FROM memories_vec
@@ -110,7 +135,7 @@ export class SqliteVecBackend implements VectorBackend {
     let sql = 'SELECT f.memory_id, f.embedding FROM memories_vec_fallback f';
     const params: any[] = [];
     if (filter?.agent_id) {
-      sql += ' JOIN memories m ON m.id = f.memory_id WHERE m.agent_id = ? AND m.superseded_by IS NULL';
+      sql += ' JOIN memories m ON m.id = f.memory_id WHERE (m.agent_id = ? OR m.agent_id IS NULL OR m.agent_id = \'\') AND m.superseded_by IS NULL';
       params.push(filter.agent_id);
     }
     const all = db.prepare(sql).all(...params) as {

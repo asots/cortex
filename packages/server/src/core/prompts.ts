@@ -185,7 +185,19 @@ NOTE: "v0.6.7" and "Dashboard 图谱" are version-specific details — NOT extra
 [USER]: 你上次给的代码有bug，少了错误处理
 [ASSISTANT]: 抱歉！记住了，以后生成代码都要加完整的 error handling
 
-{"memories": [{"content": "用户指出生成的代码缺少错误处理", "category": "agent_self_improvement", "importance": 0.85, "source": "self_reflection", "reasoning": "agent learns to always include error handling"}, {"content": "生成代码时必须包含完整的错误处理", "category": "constraint", "importance": 0.9, "source": "user_stated", "reasoning": "user established a quality requirement"}], "nothing_extracted": false}`;
+{"memories": [{"content": "用户指出生成的代码缺少错误处理", "category": "agent_self_improvement", "importance": 0.85, "source": "self_reflection", "reasoning": "agent learns to always include error handling"}, {"content": "生成代码时必须包含完整的错误处理", "category": "constraint", "importance": 0.9, "source": "user_stated", "reasoning": "user established a quality requirement"}], "nothing_extracted": false}
+
+### Example 8: English technical decision
+[USER]: I've been using PostgreSQL but thinking about switching to CockroachDB for the distributed setup
+[ASSISTANT]: CockroachDB handles multi-region well, but migration can be tricky
+
+{"memories": [{"content": "Considering migrating from PostgreSQL to CockroachDB for distributed database needs", "category": "goal", "importance": 0.8, "source": "user_stated", "reasoning": "architecture migration plan"}], "relations": [{"subject": "user", "predicate": "uses", "object": "PostgreSQL", "confidence": 0.9, "expired": false}, {"subject": "user", "predicate": "interested_in", "object": "CockroachDB", "confidence": 0.7, "expired": false}], "nothing_extracted": false}
+
+### Example 9: Japanese daily preference
+[USER]: 毎朝7時に起きてるけど、最近は6時に変えようかなと思ってる
+[ASSISTANT]: 早起きいいですね！朝の時間が増えると生産性上がりますよ
+
+{"memories": [{"content": "現在毎朝7時起き、6時起きへの変更を検討中", "category": "preference", "importance": 0.7, "source": "user_stated", "reasoning": "daily routine preference change"}], "nothing_extracted": false}`;
 
 
 // ── Flush: session highlights (conversation summary) ─────

@@ -1,5 +1,5 @@
-import React from 'react';
-import { getConfig, updateConfig, triggerExport, triggerReindex } from '../../../api/client.js';
+import React, { useState } from 'react';
+import { getConfig, updateConfig, exportFullConfig, triggerExport, triggerReindex } from '../../../api/client.js';
 
 interface DataManagementProps {
   config: any;
@@ -8,7 +8,27 @@ interface DataManagementProps {
   t: (key: string, params?: any) => string;
 }
 
+function maskSensitive(obj: any): any {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj === 'string') return obj;
+  if (Array.isArray(obj)) return obj.map(maskSensitive);
+  if (typeof obj === 'object') {
+    const result: any = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (/^(token|apiKey|apikey|api_key|secret|password)$/i.test(k) && typeof v === 'string' && v.length > 0) {
+        result[k] = v.slice(0, 4) + '••••' + v.slice(-4);
+      } else {
+        result[k] = maskSensitive(v);
+      }
+    }
+    return result;
+  }
+  return obj;
+}
+
 export default function DataManagement({ config, setConfig, setToast, t }: DataManagementProps) {
+  const [showConfig, setShowConfig] = useState(false);
+
   return (
     <>
       {/* ── Data Management ── */}
@@ -59,61 +79,73 @@ export default function DataManagement({ config, setConfig, setToast, t }: DataM
         </div>
       </div>
 
-      {/* ── Full Config JSON ── */}
+      {/* ── Full Config JSON (collapsed by default) ── */}
       <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <h3>{t('settings.fullConfig')}</h3>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn" onClick={() => {
-              const input = document.createElement('input');
-              input.type = 'file';
-              input.accept = '.json';
-              input.onchange = async (e: any) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                try {
-                  const text = await file.text();
-                  const parsed = JSON.parse(text);
-                  // Strip read-only / sensitive fields that shouldn't be imported
-                  delete parsed.port;
-                  delete parsed.host;
-                  delete parsed.storage;
-                  delete parsed.auth;
-                  delete parsed.cors;
-                  delete parsed.rateLimit;
-                  delete parsed.vectorBackend;
-                  // Strip masked apiKey fields (hasApiKey: true but no real key)
-                  for (const key of ['extraction', 'lifecycle']) {
-                    if (parsed.llm?.[key]?.hasApiKey !== undefined) {
-                      delete parsed.llm[key].hasApiKey;
-                      if (!parsed.llm[key].apiKey) delete parsed.llm[key].apiKey;
+        <div
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+          onClick={() => setShowConfig(!showConfig)}
+        >
+          <h3 style={{ margin: 0 }}>
+            <span style={{ display: 'inline-block', transform: showConfig ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s', marginRight: 8 }}>▶</span>
+            {t('settings.fullConfig')}
+          </h3>
+          {showConfig && (
+            <div style={{ display: 'flex', gap: 8 }} onClick={e => e.stopPropagation()}>
+              <button className="btn" onClick={() => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.json';
+                input.onchange = async (e: any) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    const text = await file.text();
+                    const parsed = JSON.parse(text);
+                    delete parsed.port;
+                    delete parsed.host;
+                    delete parsed.storage;
+                    delete parsed.auth;
+                    delete parsed.cors;
+                    delete parsed.rateLimit;
+                    delete parsed.vectorBackend;
+                    for (const key of ['extraction', 'lifecycle']) {
+                      if (parsed.llm?.[key]?.hasApiKey !== undefined) {
+                        delete parsed.llm[key].hasApiKey;
+                        if (!parsed.llm[key].apiKey) delete parsed.llm[key].apiKey;
+                      }
                     }
+                    if (parsed.embedding?.hasApiKey !== undefined) {
+                      delete parsed.embedding.hasApiKey;
+                      if (!parsed.embedding.apiKey) delete parsed.embedding.apiKey;
+                    }
+                    if (!confirm(t('settings.confirmImportConfig'))) return;
+                    await updateConfig(parsed);
+                    const refreshed = await getConfig();
+                    setConfig(refreshed);
+                    setToast({ message: t('settings.toastConfigImported'), type: 'success' });
+                  } catch (e: any) {
+                    setToast({ message: t('settings.toastConfigImportFailed', { message: e.message }), type: 'error' });
                   }
-                  if (parsed.embedding?.hasApiKey !== undefined) {
-                    delete parsed.embedding.hasApiKey;
-                    if (!parsed.embedding.apiKey) delete parsed.embedding.apiKey;
-                  }
-                  if (!confirm(t('settings.confirmImportConfig'))) return;
-                  await updateConfig(parsed);
-                  const refreshed = await getConfig();
-                  setConfig(refreshed);
-                  setToast({ message: t('settings.toastConfigImported'), type: 'success' });
-                } catch (e: any) {
-                  setToast({ message: t('settings.toastConfigImportFailed', { message: e.message }), type: 'error' });
-                }
-              };
-              input.click();
-            }}>{t('settings.importConfig')}</button>
-            <button className="btn" onClick={() => {
-              const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a'); a.href = url; a.download = `cortex-config-${new Date().toISOString().slice(0, 10)}.json`; a.click();
-              URL.revokeObjectURL(url);
-              setToast({ message: t('settings.toastJsonExported'), type: 'success' });
-            }}>{t('settings.exportJson')}</button>
-          </div>
+                };
+                input.click();
+              }}>{t('settings.importConfig')}</button>
+              <button className="btn" onClick={async () => {
+                if (!confirm(t('settings.confirmExportConfig'))) return;
+                try {
+                  const fullConfig = await exportFullConfig();
+                  const blob = new Blob([JSON.stringify(fullConfig, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a'); a.href = url; a.download = `cortex-config-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+                  URL.revokeObjectURL(url);
+                  setToast({ message: t('settings.toastConfigExported'), type: 'success' });
+                } catch (e: any) { setToast({ message: e.message, type: 'error' }); }
+              }}>{t('settings.exportConfig')}</button>
+            </div>
+          )}
         </div>
-        <pre className="json-debug">{JSON.stringify(config, null, 2)}</pre>
+        {showConfig && (
+          <pre className="json-debug" style={{ marginTop: 12 }}>{JSON.stringify(maskSensitive(config), null, 2)}</pre>
+        )}
       </div>
     </>
   );

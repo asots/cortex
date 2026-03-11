@@ -13,7 +13,10 @@ export const SENSITIVE_ENTITY_RE = /(?:sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|g
 const MIN_CONFIDENCE = 0.5;
 
 /** Maximum entity name length (prevents sentences as entity names) */
-const MAX_ENTITY_LEN = 100;
+const MAX_ENTITY_LEN = 50;
+
+/** Noise entity patterns — too generic or version-specific to be useful relations */
+const NOISE_ENTITY_RE = /^(v\d+\.\d+|version|session|对话|消息|记忆|bug|error|fix|issue|task|问题|修复|功能|配置|设置|操作|处理|方案|测试|result|data|info|item|thing|stuff|内容|结果|信息)$/i;
 
 /**
  * Parse and validate relation triples from LLM JSON output.
@@ -35,6 +38,10 @@ export function parseRelations(obj: any): ExtractedRelation[] {
       if (r.object.length > MAX_ENTITY_LEN) return false;
       if (SENSITIVE_ENTITY_RE.test(r.subject)) return false;
       if (SENSITIVE_ENTITY_RE.test(r.object)) return false;
+      // Fix 9: Filter noise entities (too generic or version-specific)
+      if (NOISE_ENTITY_RE.test(r.subject.trim()) || NOISE_ENTITY_RE.test(r.object.trim())) return false;
+      // Fix 9: Subject and object shouldn't be the same
+      if (normalizeEntity(r.subject) === normalizeEntity(r.object)) return false;
       return true;
     })
     .map((r: any) => ({
