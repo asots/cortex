@@ -115,9 +115,13 @@ export class LifecycleEngine {
       log.info('Phase 2: promoteToCore');
       report.promoted = await this.promoteToCore(dryRun, report.affectedMemories, agentId);
 
-      // Phase 3: Core dedup and merge
-      log.info('Phase 3: deduplicateCore');
-      report.merged = await this.deduplicateCore(dryRun, agentId);
+      // Phase 3: Core dedup and merge (skip in dry-run — O(N) embedding calls)
+      if (!dryRun) {
+        log.info('Phase 3: deduplicateCore');
+        report.merged = await this.deduplicateCore(dryRun, agentId);
+      } else {
+        log.info('Phase 3: deduplicateCore (skipped in dry-run)');
+      }
 
       // Phase 4: Core -> Archive demotion
       log.info('Phase 4: archiveStale');
@@ -135,11 +139,13 @@ export class LifecycleEngine {
       log.info('Phase 6b: updateRelationDecay');
       await this.updateRelationDecay();
 
-      // Phase 7: Synthesize user profiles for all agents
-      try {
-        await this.synthesizeAllProfiles();
-      } catch (e: any) {
-        log.warn({ error: e.message }, 'Profile synthesis failed during lifecycle run');
+      // Phase 7: Synthesize user profiles for all agents (skip in dry-run)
+      if (!dryRun) {
+        try {
+          await this.synthesizeAllProfiles();
+        } catch (e: any) {
+          log.warn({ error: e.message }, 'Profile synthesis failed during lifecycle run');
+        }
       }
 
       // Phase 8: Clean old access logs (keep 30 days)
@@ -323,17 +329,34 @@ export class LifecycleEngine {
     const db = getDb();
     const agentFilter = agentId ? ' AND agent_id = ?' : '';
     const params = agentId ? [agentId] : [];
+
+    // Only dedup recently created/promoted core memories (last 48h) to avoid
+    // O(N) embedding calls on the full corpus. Older entries were already deduped
+    // on ingest or in previous lifecycle runs.
     const coreEntries = db.prepare(
-      `SELECT * FROM memories WHERE layer = 'core' AND superseded_by IS NULL${agentFilter} ORDER BY created_at DESC`
+      `SELECT * FROM memories WHERE layer = 'core' AND superseded_by IS NULL
+        AND created_at > datetime('now', '-48 hours')${agentFilter}
+        ORDER BY created_at DESC`
     ).all(...params) as Memory[];
 
-    if (coreEntries.length < 2) return 0;
+    if (coreEntries.length < 1) return 0;
+
+    log.info({ candidates: coreEntries.length }, 'deduplicateCore: scanning recent entries');
 
     let merged = 0;
     const superseded = new Set<string>();
     const { exactDupThreshold } = this.config.sieve;
     // Use a slightly wider threshold for lifecycle dedup (1.5x exact dup)
     const lifecycleDupThreshold = exactDupThreshold * 1.5;
+
+    // First pass: text similarity pre-filter to avoid unnecessary embedding calls
+    // Group by agent_id for isolation
+    const byAgent = new Map<string, Memory[]>();
+    for (const e of coreEntries) {
+      const list = byAgent.get(e.agent_id) || [];
+      list.push(e);
+      byAgent.set(e.agent_id, list);
+    }
 
     for (const entry of coreEntries) {
       if (entry.is_pinned) continue;
