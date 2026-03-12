@@ -511,24 +511,45 @@ function AppContent() {
                     setUpdateResult(null);
                     setUpdateCountdown(0);
                     const target = versionInfo.latestRelease!.version;
+
+                    // Phase 1: Trigger update (backend pulls image + spawns updater)
                     try { await triggerUpdate(); } catch {}
-                    // Server will restart — poll until it comes back with new version
-                    // Wait a few seconds for the container to die first
-                    await new Promise(r => setTimeout(r, 5000));
-                    let elapsed = 5;
+
+                    // Phase 2: Wait for server to go down first
+                    // Don't poll immediately — give the container time to be replaced
+                    let elapsed = 0;
                     const pollTimer = setInterval(() => { elapsed++; setUpdateCountdown(elapsed); }, 1000);
+
+                    // Wait up to 15s for server to go offline
+                    let serverWentDown = false;
+                    for (let i = 0; i < 15; i++) {
+                      await new Promise(r => setTimeout(r, 1000));
+                      try {
+                        await getHealth();
+                        // Still up — keep waiting
+                      } catch {
+                        serverWentDown = true;
+                        break;
+                      }
+                    }
+
+                    // Phase 3: Poll for server to come back with new version
+                    // Allow up to 90s for pull + recreate (CI images can be large)
                     let found = false;
-                    for (let i = 0; i < 30; i++) {
+                    const maxPollAttempts = serverWentDown ? 45 : 60;
+                    for (let i = 0; i < maxPollAttempts; i++) {
+                      await new Promise(r => setTimeout(r, 2000));
                       try {
                         const h = await getHealth();
                         if (h.version === target) {
                           clearInterval(pollTimer);
                           setUpdateResult('success');
                           setUpdating(false);
-                          setTimeout(() => window.location.reload(), 1000);
+                          setTimeout(() => window.location.reload(), 1500);
                           found = true;
                           break;
-                        } else if (h.version) {
+                        } else if (h.version && serverWentDown) {
+                          // Server came back but with old version — image may not have updated
                           clearInterval(pollTimer);
                           setUpdateResult('stale');
                           setUpdating(false);
@@ -536,10 +557,11 @@ function AppContent() {
                           found = true;
                           break;
                         }
+                        // Version still old but server never went down — keep waiting
                       } catch {
                         // Server still restarting, keep polling
+                        serverWentDown = true;
                       }
-                      await new Promise(r => setTimeout(r, 2000));
                     }
                     clearInterval(pollTimer);
                     if (!found) {
@@ -559,12 +581,20 @@ function AppContent() {
             {updating && (
               <div style={{ marginTop: 4 }}>
                 <div style={{ fontSize: 11, marginBottom: 3, textAlign: 'center' }}>
-                  {locale === 'zh' ? `⏳ 重启中... ${updateCountdown}s` : `⏳ Restarting... ${updateCountdown}s`}
+                  {updateCountdown < 5
+                    ? (locale === 'zh' ? '📦 正在拉取镜像...' : '📦 Pulling image...')
+                    : updateCountdown < 15
+                      ? (locale === 'zh' ? '🔄 等待服务重启...' : '🔄 Waiting for restart...')
+                      : (locale === 'zh' ? `⏳ 重建容器中... ${updateCountdown}s` : `⏳ Rebuilding container... ${updateCountdown}s`)
+                  }
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', marginBottom: 3 }}>
+                  {locale === 'zh' ? '请勿关闭或刷新页面' : 'Do not close or refresh this page'}
                 </div>
                 <div style={{ height: 3, background: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' }}>
                   <div style={{
                     height: '100%', background: 'var(--primary)', borderRadius: 2,
-                    width: `${((20 - updateCountdown) / 20) * 100}%`,
+                    width: `${Math.min((updateCountdown / 90) * 100, 95)}%`,
                     transition: 'width 1s linear',
                   }} />
                 </div>
@@ -577,9 +607,9 @@ function AppContent() {
             )}
             {updateResult === 'stale' && (
               <div style={{ marginTop: 4, fontSize: 11, textAlign: 'center' }}>
-                <div style={{ color: '#f59e0b' }}>⚠️ {locale === 'zh' ? '版本未变化，可能更新未完成' : 'Version unchanged, update may not have completed'}</div>
+                <div style={{ color: '#f59e0b' }}>⚠️ {locale === 'zh' ? '版本未变化 — 新镜像可能还在构建中，请稍后再试' : 'Version unchanged — new image may still be building, try again later'}</div>
                 <button onClick={() => { setUpdateResult(null); }} style={{ fontSize: 10, color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', marginTop: 2 }}>
-                  {locale === 'zh' ? '重试' : 'Retry'}
+                  {locale === 'zh' ? '🔄 重试' : '🔄 Retry'}
                 </button>
               </div>
             )}
