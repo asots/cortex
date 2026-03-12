@@ -6,10 +6,11 @@ const log = createLogger('reranker');
 
 export interface RerankerConfig {
   enabled: boolean;
-  provider: 'cohere' | 'llm' | 'none';
+  provider: 'cohere' | 'voyage' | 'jina' | 'siliconflow' | 'llm' | 'none';
   apiKey?: string;
   model?: string;
   topN?: number;
+  baseUrl?: string;
 }
 
 export interface Reranker {
@@ -152,6 +153,188 @@ Output ONLY valid JSON, no explanation.`,
 }
 
 /**
+ * Voyage AI Rerank API integration.
+ * Docs: https://docs.voyageai.com/docs/reranker
+ */
+export class VoyageReranker implements Reranker {
+  private apiKey: string;
+  private model: string;
+  private defaultTopN: number;
+
+  constructor(opts: { apiKey?: string; model?: string; topN?: number }) {
+    this.apiKey = opts.apiKey || process.env.VOYAGE_API_KEY || '';
+    this.model = opts.model || 'rerank-2.5';
+    this.defaultTopN = opts.topN || 10;
+  }
+
+  async rerank(query: string, results: SearchResult[], topN?: number): Promise<SearchResult[]> {
+    if (!this.apiKey) {
+      log.warn('Voyage API key not configured, skipping rerank');
+      return results;
+    }
+    if (results.length === 0) return results;
+
+    const n = topN || this.defaultTopN;
+    try {
+      const res = await fetch('https://api.voyageai.com/v1/rerank', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          query,
+          documents: results.map(r => r.content),
+          top_k: Math.min(n, results.length),
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Voyage rerank error ${res.status}: ${body}`);
+      }
+
+      const data = (await res.json()) as { data: { index: number; relevance_score: number }[] };
+
+      const reranked: SearchResult[] = data.data.map(r => ({
+        ...results[r.index]!,
+        finalScore: r.relevance_score,
+      }));
+
+      log.info({ query: query.slice(0, 50), input: results.length, output: reranked.length }, 'Voyage reranked results');
+      return reranked;
+    } catch (e: any) {
+      log.warn({ error: e.message }, 'Voyage rerank failed, returning original order');
+      return results;
+    }
+  }
+}
+
+/**
+ * Jina AI Reranker API integration.
+ * Docs: https://jina.ai/reranker/
+ */
+export class JinaReranker implements Reranker {
+  private apiKey: string;
+  private model: string;
+  private defaultTopN: number;
+
+  constructor(opts: { apiKey?: string; model?: string; topN?: number }) {
+    this.apiKey = opts.apiKey || process.env.JINA_API_KEY || '';
+    this.model = opts.model || 'jina-reranker-v2-base-multilingual';
+    this.defaultTopN = opts.topN || 10;
+  }
+
+  async rerank(query: string, results: SearchResult[], topN?: number): Promise<SearchResult[]> {
+    if (!this.apiKey) {
+      log.warn('Jina API key not configured, skipping rerank');
+      return results;
+    }
+    if (results.length === 0) return results;
+
+    const n = topN || this.defaultTopN;
+    try {
+      const res = await fetch('https://api.jina.ai/v1/rerank', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          query,
+          documents: results.map(r => r.content),
+          top_n: Math.min(n, results.length),
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Jina rerank error ${res.status}: ${body}`);
+      }
+
+      const data = (await res.json()) as { results: { index: number; relevance_score: number }[] };
+
+      const reranked: SearchResult[] = data.results.map(r => ({
+        ...results[r.index]!,
+        finalScore: r.relevance_score,
+      }));
+
+      log.info({ query: query.slice(0, 50), input: results.length, output: reranked.length }, 'Jina reranked results');
+      return reranked;
+    } catch (e: any) {
+      log.warn({ error: e.message }, 'Jina rerank failed, returning original order');
+      return results;
+    }
+  }
+}
+
+/**
+ * SiliconFlow Reranker API integration (OpenAI-compatible rerank endpoint).
+ * Docs: https://docs.siliconflow.cn/
+ */
+export class SiliconFlowReranker implements Reranker {
+  private apiKey: string;
+  private model: string;
+  private defaultTopN: number;
+  private baseUrl: string;
+
+  constructor(opts: { apiKey?: string; model?: string; topN?: number; baseUrl?: string }) {
+    this.apiKey = opts.apiKey || process.env.SILICONFLOW_API_KEY || '';
+    this.model = opts.model || 'BAAI/bge-reranker-v2-m3';
+    this.defaultTopN = opts.topN || 10;
+    this.baseUrl = opts.baseUrl || 'https://api.siliconflow.cn/v1';
+  }
+
+  async rerank(query: string, results: SearchResult[], topN?: number): Promise<SearchResult[]> {
+    if (!this.apiKey) {
+      log.warn('SiliconFlow API key not configured, skipping rerank');
+      return results;
+    }
+    if (results.length === 0) return results;
+
+    const n = topN || this.defaultTopN;
+    try {
+      const res = await fetch(`${this.baseUrl}/rerank`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          query,
+          documents: results.map(r => r.content),
+          top_n: Math.min(n, results.length),
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`SiliconFlow rerank error ${res.status}: ${body}`);
+      }
+
+      const data = (await res.json()) as { results: { index: number; relevance_score: number }[] };
+
+      const reranked: SearchResult[] = data.results.map(r => ({
+        ...results[r.index]!,
+        finalScore: r.relevance_score,
+      }));
+
+      log.info({ query: query.slice(0, 50), input: results.length, output: reranked.length }, 'SiliconFlow reranked results');
+      return reranked;
+    } catch (e: any) {
+      log.warn({ error: e.message }, 'SiliconFlow rerank failed, returning original order');
+      return results;
+    }
+  }
+}
+
+/**
  * Null reranker — passes through results unchanged.
  */
 export class NullReranker implements Reranker {
@@ -171,6 +354,25 @@ export function createReranker(config?: RerankerConfig, llm?: LLMProvider): Rera
         apiKey: config.apiKey,
         model: config.model,
         topN: config.topN,
+      });
+    case 'voyage':
+      return new VoyageReranker({
+        apiKey: config.apiKey,
+        model: config.model || 'rerank-2.5',
+        topN: config.topN,
+      });
+    case 'jina':
+      return new JinaReranker({
+        apiKey: config.apiKey,
+        model: config.model || 'jina-reranker-v2-base-multilingual',
+        topN: config.topN,
+      });
+    case 'siliconflow':
+      return new SiliconFlowReranker({
+        apiKey: config.apiKey,
+        model: config.model || 'BAAI/bge-reranker-v2-m3',
+        topN: config.topN,
+        baseUrl: config.baseUrl,
       });
     case 'llm':
       if (!llm) {

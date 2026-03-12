@@ -56,18 +56,25 @@ export default function SearchSection({
                   style={{ width: '100%', marginBottom: 8 }}
                 >
                   <option value="llm">LLM (uses extraction model)</option>
-                  <option value="cohere">Cohere</option>
+                  <option value="cohere">Cohere (rerank-v3.5)</option>
+                  <option value="voyage">Voyage AI (rerank-2.5) — 200M free tokens</option>
+                  <option value="jina">Jina AI (multilingual) — 1M free tokens</option>
+                  <option value="siliconflow">SiliconFlow (开源模型)</option>
                   <option value="none">Disabled</option>
                 </select>
 
-                {draft?.reranker?.provider === 'cohere' && (
+                {['cohere', 'voyage', 'jina', 'siliconflow'].includes(draft?.reranker?.provider) && (
                   <div style={{ marginBottom: 8 }}>
-                    <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>Cohere API Key</label>
+                    <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>
+                      {draft?.reranker?.provider === 'cohere' ? 'Cohere' :
+                       draft?.reranker?.provider === 'voyage' ? 'Voyage AI' :
+                       draft?.reranker?.provider === 'jina' ? 'Jina AI' : 'SiliconFlow'} API Key
+                    </label>
                     <input
                       type="password"
                       value={draft?.reranker?.apiKey ?? ''}
                       onChange={e => setDraft((d: any) => ({ ...d, reranker: { ...d.reranker, apiKey: e.target.value } }))}
-                      placeholder="Enter Cohere API key"
+                      placeholder={`Enter ${draft?.reranker?.provider} API key`}
                       style={{ width: '100%' }}
                     />
                   </div>
