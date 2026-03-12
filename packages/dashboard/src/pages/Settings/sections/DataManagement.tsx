@@ -28,6 +28,8 @@ function maskSensitive(obj: any): any {
 
 export default function DataManagement({ config, setConfig, setToast, t }: DataManagementProps) {
   const [showConfig, setShowConfig] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
+  const [reindexStart, setReindexStart] = useState<number | null>(null);
 
   return (
     <>
@@ -65,16 +67,30 @@ export default function DataManagement({ config, setConfig, setToast, t }: DataM
         {/* Reindex */}
         <div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('settings.maintenance')}</div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button className="btn" onClick={async () => {
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button className="btn" disabled={reindexing} onClick={async () => {
               if (!confirm(t('settings.confirmReindex'))) return;
               try {
-                setToast({ message: t('settings.toastReindexStarted'), type: 'success' });
+                setReindexing(true);
+                setReindexStart(Date.now());
                 const result = await triggerReindex();
-                setToast({ message: t('settings.toastReindexComplete', { indexed: result.indexed, total: result.total, errors: result.errors }), type: result.errors > 0 ? 'error' : 'success' });
-              } catch (e: any) { setToast({ message: t('settings.toastReindexFailed', { message: e.message }), type: 'error' }); }
-            }}>{t('settings.rebuildIndex')}</button>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('settings.rebuildHint')}</span>
+                setReindexing(false);
+                const elapsed = ((Date.now() - (reindexStart || Date.now())) / 1000).toFixed(1);
+                setToast({ message: t('settings.toastReindexComplete', { indexed: result.indexed, total: result.total, errors: result.errors }) + ` (${elapsed}s)`, type: result.errors > 0 ? 'error' : 'success' });
+              } catch (e: any) {
+                setReindexing(false);
+                setToast({ message: t('settings.toastReindexFailed', { message: e.message }), type: 'error' });
+              }
+            }}>{reindexing ? t('settings.reindexing') : t('settings.rebuildIndex')}</button>
+            {reindexing && (
+              <span style={{ fontSize: 12, color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid var(--primary)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                {t('settings.reindexingHint')}
+              </span>
+            )}
+            {!reindexing && (
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('settings.rebuildHint')}</span>
+            )}
           </div>
         </div>
       </div>
