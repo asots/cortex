@@ -5,6 +5,7 @@ import {
   SectionKey,
   LLM_PROVIDERS,
   EMBEDDING_PROVIDERS,
+  RERANKER_PROVIDERS,
   EMBEDDING_DIMENSIONS,
   CUSTOM_MODEL,
   SCHEDULE_PRESETS,
@@ -105,6 +106,15 @@ export default function Settings() {
           baseUrl: config.embedding?.baseUrl ?? '',
           hasApiKey: config.embedding?.hasApiKey ?? false,
         },
+        reranker: {
+          provider: config.search?.reranker?.provider ?? 'none',
+          model: config.search?.reranker?.model ?? '',
+          customModel: '',
+          useCustomModel: false,
+          apiKey: '',
+          baseUrl: config.search?.reranker?.baseUrl ?? '',
+          hasApiKey: config.search?.reranker?.hasApiKey ?? false,
+        },
       }),
       search: () => ({
         hybrid: config.search?.hybrid ?? false,
@@ -186,6 +196,14 @@ export default function Settings() {
       if (d.embedding.model && !embPresets.includes(d.embedding.model)) {
         d.embedding.useCustomModel = true;
         d.embedding.customModel = d.embedding.model;
+      }
+      if (d.reranker) {
+        const rrProv = d.reranker.provider;
+        const rrPresets = RERANKER_PROVIDERS[rrProv]?.models ?? [];
+        if (d.reranker.model && !rrPresets.includes(d.reranker.model)) {
+          d.reranker.useCustomModel = true;
+          d.reranker.customModel = d.reranker.model;
+        }
       }
     }
 
@@ -288,6 +306,20 @@ export default function Settings() {
         };
         if (draft.embedding.apiKey) embOut.apiKey = draft.embedding.apiKey;
         payload.embedding = embOut;
+
+        // Save reranker provider/model/key (behavioral settings stay in search section)
+        if (draft.reranker) {
+          const rrProvider = draft.reranker.provider ?? 'none';
+          const rrModel = draft.reranker.useCustomModel ? draft.reranker.customModel : draft.reranker.model;
+          if (!payload.search) payload.search = {};
+          payload.search.reranker = {
+            ...((config.search?.reranker) ?? {}),
+            provider: rrProvider,
+            ...(rrModel ? { model: rrModel } : {}),
+            ...(draft.reranker.apiKey ? { apiKey: draft.reranker.apiKey } : {}),
+            ...(draft.reranker.baseUrl ? { baseUrl: draft.reranker.baseUrl } : {}),
+          };
+        }
       } else if (section === 'search') {
         payload.search = {
           hybrid: draft.hybrid,
