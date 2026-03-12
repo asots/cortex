@@ -43,13 +43,13 @@ export default function SearchSection({
           </div>
 
           <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 12 }}>
-            <label style={{ fontWeight: 600, display: 'block', marginBottom: 8 }}>🔍 Search Enhancement</label>
+            <label style={{ fontWeight: 600, display: 'block', marginBottom: 8 }}>🔍 {t('settings.searchEnhancement')}</label>
 
-            {renderToggleField('🎯 Reranker', 'After search, LLM re-scores all results for query-specific relevance. Final score = reranker × weight + original × (1-weight). Adds ~2-3s latency, 1 LLM call.', 'reranker.enabled')}
+            {renderToggleField(`🎯 ${t('settings.rerankerTitle')}`, t('settings.rerankerDesc'), 'reranker.enabled')}
 
             {draft?.reranker?.enabled && (
               <div style={{ marginLeft: 16 }}>
-                <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>Provider</label>
+                <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>{t('settings.rerankerProvider')}</label>
                 <select
                   value={draft?.reranker?.provider ?? 'none'}
                   onChange={e => setDraft((d: any) => ({ ...d, reranker: { ...d.reranker, provider: e.target.value } }))}
@@ -69,7 +69,7 @@ export default function SearchSection({
                       <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>
                         {draft?.reranker?.provider === 'cohere' ? 'Cohere' :
                          draft?.reranker?.provider === 'voyage' ? 'Voyage AI' :
-                         draft?.reranker?.provider === 'jina' ? 'Jina AI' : 'SiliconFlow'} API Key
+                         draft?.reranker?.provider === 'jina' ? 'Jina AI' : 'SiliconFlow'} {t('settings.rerankerApiKey')}
                       </label>
                       <input
                         type="password"
@@ -80,7 +80,7 @@ export default function SearchSection({
                       />
                     </div>
                     <div style={{ marginBottom: 8 }}>
-                      <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>Model</label>
+                      <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>{t('settings.rerankerModel')}</label>
                       <select
                         value={draft?.reranker?.model ?? ''}
                         onChange={e => setDraft((d: any) => ({ ...d, reranker: { ...d.reranker, model: e.target.value } }))}
@@ -116,7 +116,7 @@ export default function SearchSection({
                   </>
                 )}
 
-                <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>Top N results</label>
+                <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>{t('settings.rerankerTopN')}</label>
                 <input
                   type="number"
                   value={draft?.reranker?.topN ?? 10}
@@ -126,7 +126,7 @@ export default function SearchSection({
 
                 <div style={{ marginTop: 12 }}>
                   <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>
-                    Score Fusion — Reranker : Original = {((draft?.reranker?.weight ?? 0.5) * 100).toFixed(0)}% : {((1 - (draft?.reranker?.weight ?? 0.5)) * 100).toFixed(0)}%
+                    {t('settings.rerankerScoreFusion')} — {t('settings.rerankerTitle')} : Original = {((draft?.reranker?.weight ?? 0.5) * 100).toFixed(0)}% : {((1 - (draft?.reranker?.weight ?? 0.5)) * 100).toFixed(0)}%
                   </label>
                   <input
                     type="range"
@@ -135,8 +135,8 @@ export default function SearchSection({
                     min={0} max={1} step={0.05} style={{ width: '100%' }}
                   />
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)' }}>
-                    <span>← 信任原始分数</span>
-                    <span>信任 Reranker →</span>
+                    <span>{t('settings.rerankerTrustOriginal')}</span>
+                    <span>{t('settings.rerankerTrustReranker')}</span>
                   </div>
                 </div>
               </div>
@@ -151,7 +151,7 @@ export default function SearchSection({
             {displayRow(t('settings.textWeight'), config.search?.textWeight?.toFixed(2))}
             {displayRow(t('settings.recencyBoostWindow'), humanizeDuration(config.search?.recencyBoostWindow), t('settings.recencyBoostWindowDesc'))}
             {displayRow(`🎚️ ${t('settings.minSimilarity')}`, `${((config.search?.minSimilarity ?? 0.2) * 100).toFixed(0)}%`, t('settings.minSimilarityDesc'))}
-            {displayRow('Reranker', config.search?.reranker?.enabled ? `${config.search.reranker.provider} (top ${config.search.reranker.topN}, weight ${((config.search.reranker.weight ?? 0.5) * 100).toFixed(0)}%)` : 'Off')}
+            {displayRow(t('settings.rerankerTitle'), config.search?.reranker?.enabled ? `${config.search.reranker.provider}${config.search.reranker.model ? ' / ' + config.search.reranker.model : ''} (top ${config.search.reranker.topN}, weight ${((config.search.reranker.weight ?? 0.5) * 100).toFixed(0)}%)` : 'Off')}
           </tbody>
         </table>
       )}
