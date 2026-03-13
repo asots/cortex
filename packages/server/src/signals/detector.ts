@@ -113,6 +113,8 @@ const HIGH_SIGNAL_PATTERNS: {
       /以后(都|总是|不要|别)/,
       /记住我(喜欢|不喜欢|偏好)/,
       /can'?t stand/i,
+      // Korean preference patterns
+      /(?:좋아|싫어|선호|원해|원하지)/,
     ],
     importance: 0.85,
     name: 'preference',
@@ -138,14 +140,19 @@ const HIGH_SIGNAL_PATTERNS: {
   {
     category: 'identity',
     patterns: [
-      // Expanded role list
-      /我是[^，。！？\n]{1,30}(的人|工程师|投资者|开发者|设计师|学生|老师|医生|程序员|产品经理|创始人|自由职业|研究员|架构师|运维|全栈)/,
+      // Expanded role list — tech + non-tech professions
+      /我是[^，。！？\n]{1,30}(的人|工程师|投资者|开发者|设计师|学生|老师|医生|程序员|产品经理|创始人|自由职业|研究员|架构师|运维|全栈|护士|律师|会计|厨师|主妇|骑手|司机|销售|运营|编辑|记者|翻译|教授|博士|硕士)/,
+      // "我是做...的" pattern for colloquial identity
+      /我是做[^，。！？\n]{1,20}的/,
       /我叫[^，。！？\n]{1,20}/,
       /我的名字是/,
-      /i(?:'m| am) (?:a |an )?[a-z]+ (?:developer|engineer|investor|designer|student|teacher|doctor|programmer|founder|researcher|architect|freelancer)/i,
+      /i(?:'m| am) (?:a |an )?[a-z]* ?(?:developer|engineer|investor|designer|student|teacher|doctor|programmer|founder|researcher|architect|freelancer|nurse|lawyer|accountant|chef|driver|writer|editor|translator|manager|consultant|artist|musician|photographer)/i,
       /my name is/i,
       /call me /i,
       /私は.{1,20}(と申します|といいます)/,
+      // Korean identity
+      /저는.{1,20}(입니다|이에요|예요)/,
+      /제 이름은/,
       /我住在/,
       /i live in/i,
       /我在[^，。！？\n]{1,20}工作/,
@@ -254,8 +261,9 @@ const HIGH_SIGNAL_PATTERNS: {
   {
     category: 'skill',
     patterns: [
-      // "我会" + skill noun/verb, NOT "我会去/想/帮/看/试/等/来/走/做" (future tense actions)
-      /我会(写|用|做|开发|设计|搭建|部署|配置|管理|运维|编程|编写|调试|优化)[^，。！？\n]{0,30}/,
+      // "我会" + skill verb, NOT "我会去/想/帮/看/试/等/来/走" (future tense actions)
+      // Covers both tech skills (写代码/部署) and life skills (做饭/弹琴/开车/画画/游泳)
+      /我会(写|用|做|开发|设计|搭建|部署|配置|管理|运维|编程|编写|调试|优化|弹|拉|吹|画|唱|跳|游|开|修|缝|织|煮|炒|烤|切|教|翻译|演|拍|剪)[^，。！？\n]{0,30}/,
       /我(很|比较|特别|非常|超)?擅长/,
       /我(很|比较|特别|非常|超)?熟悉/,
       /我精通/,
@@ -421,12 +429,12 @@ export function isSmallTalk(message: string): boolean {
   if (/^[\p{Emoji}\s]+$/u.test(trimmed)) return true;
 
   const smallTalkPatterns = [
-    /^(hi|hello|hey|yo|sup|嗨|你好|哈喽|おはよう|こんにちは|早安|晚安|おやすみ)[\s!！。.]*$/i,
-    /^(thanks|thank you|谢谢|ありがとう|thx|tks|ty)[\s!！。.]*$/i,
-    /^(ok|okay|好的|了解|わかった|はい|嗯嗯|嗯|行)[\s!！。.]*$/i,
-    /^(bye|goodbye|再见|じゃね|さようなら|拜拜|88)[\s!！。.]*$/i,
-    /^(lol|haha|哈哈|hhh|笑|www|233|666|nb|牛)[\s!！。.]*$/i,
-    /^(yes|no|是|不是|うん|ううん|对|没错|是的)[\s!！。.]*$/i,
+    /^(hi|hello|hey|yo|sup|嗨|你好|哈喽|おはよう|こんにちは|早安|晚安|おやすみ|안녕|안녕하세요)[\s!！。.]*$/i,
+    /^(thanks|thank you|谢谢|ありがとう|감사|thx|tks|ty)[\s!！。.]*$/i,
+    /^(ok|okay|好的|了解|わかった|はい|嗯嗯|嗯|行|네|응)[\s!！。.]*$/i,
+    /^(bye|goodbye|再见|じゃね|さようなら|拜拜|88|잘가)[\s!！。.]*$/i,
+    /^(lol|haha|哈哈+|hhh+|笑|www+|233+|666+|nb|牛|ㅋㅋ+|ㅎㅎ+)[\s!！。.]*$/i,
+    /^(yes|no|是|不是|うん|ううん|对|没错|是的|맞아|아니)[\s!！。.]*$/i,
   ];
 
   return smallTalkPatterns.some(p => p.test(trimmed));
